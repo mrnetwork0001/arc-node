@@ -608,6 +608,23 @@ impl Node {
         &self.follow_endpoints
     }
 
+    /// `true` if the node is configured to prune the Malachite CL store (used e.g. for
+    /// `quake report` store appendix defaults).
+    pub fn cl_store_pruning_configured(&self) -> bool {
+        if self.cl_prune_preset.is_some() {
+            return true;
+        }
+        match &self.cl_config {
+            NodeClConfig::Modern(cmd) => {
+                cmd.full
+                    || cmd.minimal
+                    || cmd.prune_certificates_distance > 0
+                    || cmd.prune_certificates_before > 0
+            }
+            NodeClConfig::Legacy(cfg) => cfg.prune.enabled(),
+        }
+    }
+
     /// Returns the execution layer (Reth) CLI flags for this node, defined in the
     /// manifest file with the `el_config` key.
     /// If not defined, returns an empty vector.

@@ -4,7 +4,7 @@
 # Stop:   docker compose down
 # Logs:   docker compose logs -f
 #
-# Required environment variables (see docs/running-an-arc-node-docker.md):
+# Required environment variables (see docs/running-an-arc-node.md#docker):
 #   ARC_EXECUTION_IMAGE  — EL Docker image (e.g. docker.cloudsmith.io/circle/arc-network/arc-execution:0.6.0)
 #   ARC_CONSENSUS_IMAGE  — CL Docker image (e.g. docker.cloudsmith.io/circle/arc-network/arc-consensus:0.6.0)
 #   ARC_HOME             — data directory on the host (e.g. ~/.arc)

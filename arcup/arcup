@@ -8,11 +8,16 @@ set -e
 # WARNING: the SemVer pattern: major.minor.patch must be followed as we use it to determine if the script is up to date.
 ARCUP_INSTALLER_VERSION="0.0.1"
 
-REPO="circlefin/arc-node"
-# TODO: set GPG key fingerprint once release signing is configured
+REPO="${ARC_REPO:-circlefin/arc-node}"
+if [[ -n "${ARC_REPO:-}" ]] && [[ ! "$ARC_REPO" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]; then
+    echo "error: invalid ARC_REPO format: '$ARC_REPO' (expected 'owner/repo')" >&2
+    exit 1
+fi
+# TODO: set GPG key fingerprint once release signing key is published
 GPG_KEY_FINGERPRINT=""
 GPG_KEYSERVER="keyserver.ubuntu.com"
 BIN_DIR="${ARC_BIN_DIR:-$HOME/.arc/bin}"
+# Self-update always uses the canonical repo to prevent hijack via ARC_REPO
 ARCUP_BIN_URL="https://raw.githubusercontent.com/circlefin/arc-node/main/arcup/arcup"
 ARCUP_BIN_PATH="$BIN_DIR/arcup"
 CURL_HEADERS=()
@@ -333,6 +338,11 @@ main() {
     check_installer_up_to_date
 
     info "Installing arc-node binaries..."
+    info "Using repository: $REPO"
+
+    if [[ -z "$GPG_KEY_FINGERPRINT" ]]; then
+        warn "GPG signature verification is disabled — no release signing key configured"
+    fi
 
     mkdir -p "$BIN_DIR"
 

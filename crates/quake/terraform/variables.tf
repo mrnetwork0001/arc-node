@@ -56,6 +56,22 @@ variable "cc_size" {
   default = "t3.xlarge" # 4 vCPUs, 16 GiB RAM
 }
 
+# Root EBS volume size (GiB) for node instances. Override via `quake remote create --node-disk-gb`.
+# When null (default), the AMI root volume size is unchanged.
+variable "node_volume_size" {
+  type     = number
+  default  = null
+  nullable = true
+}
+
+# Root EBS volume size (GiB) for the Control Center. Override via `quake remote create --cc-disk-gb`.
+# When null (default), the AMI root volume size is unchanged.
+variable "cc_volume_size" {
+  type     = number
+  default  = null
+  nullable = true
+}
+
 variable "tags" {
   type    = list(string)
   default = ["arc-quake-testnet"]

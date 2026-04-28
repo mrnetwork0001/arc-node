@@ -37,7 +37,7 @@ use crate::ws::{WsClient, WsClientBuilder};
 use crate::erc20::TEST_TOKEN_ADDRESS;
 
 pub(crate) const TESTNET_CHAIN_ID: u64 = 1337;
-const GUZZLER_ADDRESS: Address = address!("1be052abb35D7f41609Bfec8F2fC2A684CB9984f");
+const GUZZLER_ADDRESS: Address = address!("45a834A6bB86F516D4157a8cBcc60f2F35F8398C");
 
 /// Generates and signs transactions from a pool of pre-funded genesis accounts.
 ///

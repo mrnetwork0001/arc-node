@@ -45,7 +45,7 @@ pub enum ProtocolConfigError<H> {
 pub const PROTOCOL_CONFIG_ADDRESS: Address = address!("0x3600000000000000000000000000000000000001");
 
 sol! {
-    /// ProtocolConfig interface for reward beneficiary and gas parameters
+    /// ProtocolConfig interface for gas and consensus parameters
     interface IProtocolConfig {
         /// FeeParams struct matching the contract definition
         struct FeeParams {
@@ -56,9 +56,6 @@ sol! {
             uint256 maxBaseFee;
             uint256 blockGasLimit;
         }
-
-        /// Returns the current reward beneficiary address
-        function rewardBeneficiary() external view returns (address beneficiary);
 
         /// Returns the current fee parameters
         function feeParams() external view returns (FeeParams params);
@@ -130,45 +127,6 @@ where
         .map_err(ProtocolConfigError::DecodingError)?;
 
     Ok(fee_params)
-}
-
-/// Returns the beneficiary address if successfully queried,
-/// or `Err(ProtocolConfigError)` if there was an error during execution,
-/// contract deployment issues, or empty output.
-pub fn retrieve_reward_beneficiary<E>(
-    evm: &mut E,
-) -> Result<Address, ProtocolConfigError<E::HaltReason>>
-where
-    E: Evm,
-    E::DB: DatabaseCommit,
-{
-    // Create call data for rewardBeneficiary() function
-    let call_data = IProtocolConfig::rewardBeneficiaryCall {}.abi_encode();
-
-    // Make the system call to ProtocolConfig contract
-    let result_and_state = evm
-        .transact_system_call(
-            Address::ZERO,
-            PROTOCOL_CONFIG_ADDRESS, // contract address
-            Bytes::from(call_data),
-        )
-        .map_err(|e| ProtocolConfigError::EvmError(format!("{e:?}")))?;
-
-    // Check if the call was successful
-    if !result_and_state.result.is_success() {
-        return Err(ProtocolConfigError::SystemCallFailed(
-            result_and_state.result,
-        ));
-    }
-
-    // Decode the returned address from the call result
-    let output = result_and_state.result.output().unwrap_or_default();
-    if output.is_empty() {
-        return Err(ProtocolConfigError::EmptyOutput);
-    }
-
-    let beneficiary = IProtocolConfig::rewardBeneficiaryCall::abi_decode_returns(output)?;
-    Ok(beneficiary)
 }
 
 #[cfg(test)]

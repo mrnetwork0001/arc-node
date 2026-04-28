@@ -20,11 +20,11 @@ use super::{quake_test, RpcClientFactory, TestOutcome, TestParams, TestResult};
 use crate::testnet::Testnet;
 
 const DEFAULT_P50_THRESHOLD_MS: &str = "550";
-const DEFAULT_P95_THRESHOLD_MS: &str = "1000";
+const DEFAULT_P99_THRESHOLD_MS: &str = "1000";
 const DEFAULT_WARMUP_S: &str = "30";
 const DEFAULT_OBSERVATION_S: &str = "60";
 
-/// Assert that every node's block time p50 and p95 are within thresholds.
+/// Assert that every node's block time p50 and p99 are within thresholds.
 ///
 /// Supports two modes:
 /// - `mode=interval` (default): two-scrape approach that isolates an
@@ -40,7 +40,7 @@ const DEFAULT_OBSERVATION_S: &str = "60";
 /// | `warmup_s`          | `30`          | Seconds before first scrape (`interval` mode only)   |
 /// | `observation_s`     | `60`          | Observation window (between scrapes / before scrape) |
 /// | `block_time_p50_ms` | `550`         | Fail if any node's p50 exceeds this                 |
-/// | `block_time_p95_ms` | `1000`        | Fail if any node's p95 exceeds this                 |
+/// | `block_time_p99_ms` | `1000`        | Fail if any node's p99 exceeds this                 |
 #[quake_test(group = "perf", name = "block_time")]
 fn block_time_test<'a>(
     testnet: &'a Testnet,
@@ -61,8 +61,8 @@ fn block_time_test<'a>(
             .get_or("block_time_p50_ms", DEFAULT_P50_THRESHOLD_MS)
             .parse()
             .unwrap_or(550);
-        let p95_ms: u64 = params
-            .get_or("block_time_p95_ms", DEFAULT_P95_THRESHOLD_MS)
+        let p99_ms: u64 = params
+            .get_or("block_time_p99_ms", DEFAULT_P99_THRESHOLD_MS)
             .parse()
             .unwrap_or(1000);
 
@@ -76,7 +76,7 @@ fn block_time_test<'a>(
             info!("Mode: full — waiting {observation_s}s for blocks to accumulate...");
             tokio::time::sleep(tokio::time::Duration::from_secs(observation_s)).await;
 
-            arc_checks::check_block_time(&metrics_urls, p50_ms, p95_ms).await?
+            arc_checks::check_block_time(&metrics_urls, p50_ms, p99_ms).await?
         } else {
             if warmup_s > 0 {
                 info!("Warming up for {warmup_s}s...");
@@ -92,7 +92,7 @@ fn block_time_test<'a>(
             debug!("Taking second scrape...");
             let raw_after = arc_checks::fetch_all_metrics(&metrics_urls).await;
 
-            arc_checks::check_block_time_delta(&raw_before, &raw_after, p50_ms, p95_ms)
+            arc_checks::check_block_time_delta(&raw_before, &raw_after, p50_ms, p99_ms)
         };
 
         let mut outcome = TestOutcome::new();
@@ -102,9 +102,9 @@ fn block_time_test<'a>(
 
         outcome
             .auto_summary(
-                &format!("All nodes within block time thresholds (p50<{p50_ms}ms, p95<{p95_ms}ms)"),
+                &format!("All nodes within block time thresholds (p50<{p50_ms}ms, p99<{p99_ms}ms)"),
                 &format!(
-                    "{{}} node(s) exceeded block time thresholds (p50<{p50_ms}ms, p95<{p95_ms}ms)"
+                    "{{}} node(s) exceeded block time thresholds (p50<{p50_ms}ms, p99<{p99_ms}ms)"
                 ),
             )
             .into_result()

@@ -69,6 +69,9 @@ where
         // ADR-0004: base_fee_per_gas must be present (EIP-1559) and within absolute bounds (Zero5+).
         arc_validate_header_base_fee(header.header(), &self.chain_spec)?;
 
+        // Reject blocks with a zero beneficiary (Zero6+).
+        arc_validate_beneficiary_nonzero(header.header(), &self.chain_spec)?;
+
         Ok(())
     }
 
@@ -251,6 +254,29 @@ fn arc_validate_gas_limit_bounds<H: BlockHeader, CS: Hardforks + BlockGasLimitPr
             config.min(),
             config.max()
         )));
+    }
+
+    Ok(())
+}
+
+/// Rejects blocks whose beneficiary (coinbase) is the zero address.
+///
+/// Post-Zero6, every block must have an explicit non-zero fee recipient set by the CL
+/// via `--suggested-fee-recipient`. A zero beneficiary would burn all transaction fees
+/// irrecoverably.
+#[inline]
+fn arc_validate_beneficiary_nonzero<H: BlockHeader, CS: Hardforks>(
+    header: &H,
+    chain_spec: &CS,
+) -> Result<(), ConsensusError> {
+    if !chain_spec.is_fork_active_at_block(ArcHardfork::Zero6, header.number()) {
+        return Ok(());
+    }
+
+    if header.beneficiary().is_zero() {
+        return Err(ConsensusError::Other(
+            "block beneficiary must not be the zero address".into(),
+        ));
     }
 
     Ok(())
@@ -991,6 +1017,35 @@ mod tests {
         assert!(
             matches!(result, Err(ConsensusError::Other(_))),
             "At Zero5, gas limit 0 should be invalid: {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_beneficiary_nonzero_rejected_at_zero6() {
+        use alloy_primitives::{address, Address};
+
+        let spec = LOCAL_DEV.clone();
+
+        let zero_beneficiary = Header {
+            number: 1,
+            beneficiary: Address::ZERO,
+            ..Default::default()
+        };
+        let result = arc_validate_beneficiary_nonzero(&zero_beneficiary, spec.as_ref());
+        assert!(
+            matches!(result, Err(ConsensusError::Other(_))),
+            "Zero beneficiary should be rejected post-Zero6: {result:?}"
+        );
+
+        let nonzero_beneficiary = Header {
+            number: 1,
+            beneficiary: address!("0x65E0a200006D4FF91bD59F9694220dafc49dbBC1"),
+            ..Default::default()
+        };
+        let result = arc_validate_beneficiary_nonzero(&nonzero_beneficiary, spec.as_ref());
+        assert!(
+            result.is_ok(),
+            "Non-zero beneficiary should pass: {result:?}"
         );
     }
 }

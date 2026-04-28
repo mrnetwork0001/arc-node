@@ -69,7 +69,7 @@ use reth_rpc_eth_api::{
 };
 use reth_rpc_eth_types::{error::FromEvmError, EthApiError};
 use reth_rpc_server_types::RethRpcModule;
-use reth_tracing::tracing::info;
+use reth_tracing::tracing::{info, warn};
 use reth_transaction_pool::{PoolPooledTx, PoolTransaction, TransactionPool};
 use revm::context::TxEnv;
 use std::{default::Default, marker::PhantomData, sync::Arc};
@@ -100,6 +100,8 @@ pub struct ArcNode {
     /// When true (default), pending-tx RPCs are restricted (`eth_subscribe("newPendingTransactions")`, `eth_newPendingTransactionFilter`).
     /// When false, all requests are forwarded.
     pub filter_pending_txs: bool,
+    /// Interval between tx rebroadcast rounds. Zero disables rebroadcast.
+    pub rebroadcast_interval: std::time::Duration,
 }
 
 impl Default for ArcNode {
@@ -111,6 +113,7 @@ impl Default for ArcNode {
             payload_builder_deadline_ms: None,
             wait_for_payload: true,
             filter_pending_txs: true,
+            rebroadcast_interval: crate::rebroadcast::DEFAULT_REBROADCAST_INTERVAL,
         }
     }
 }
@@ -124,6 +127,7 @@ impl ArcNode {
         payload_builder_deadline_ms: Option<u64>,
         wait_for_payload: bool,
         filter_pending_txs: bool,
+        rebroadcast_interval: std::time::Duration,
     ) -> Self {
         Self {
             rpc_cfg,
@@ -132,6 +136,7 @@ impl ArcNode {
             payload_builder_deadline_ms,
             wait_for_payload,
             filter_pending_txs,
+            rebroadcast_interval,
         }
     }
 
@@ -141,6 +146,7 @@ impl ArcNode {
         addresses_denylist_config: &AddressesDenylistConfig,
         payload_builder_deadline_ms: Option<u64>,
         wait_for_payload: bool,
+        rebroadcast_interval: std::time::Duration,
     ) -> ComponentsBuilder<
         Node,
         ArcPoolBuilder,
@@ -181,7 +187,7 @@ impl ArcNode {
             ))
             .executor(ArcExecutorBuilder::default())
             .payload(BasicPayloadServiceBuilder::new(pb_builder))
-            .network(ArcNetworkBuilder::default())
+            .network(ArcNetworkBuilder::default().with_rebroadcast_interval(rebroadcast_interval))
             .consensus(ArcConsensusBuilder::default())
     }
 
@@ -496,6 +502,7 @@ where
             &self.addresses_denylist_config,
             self.payload_builder_deadline_ms,
             self.wait_for_payload,
+            self.rebroadcast_interval,
         )
     }
 
@@ -541,10 +548,25 @@ where
     }
 }
 
-/// A basic Arc payload service.
-#[derive(Debug, Default, Clone, Copy)]
+/// Arc network builder with optional tx rebroadcast.
+#[derive(Debug, Clone, Copy)]
 pub struct ArcNetworkBuilder {
-    // TODO add closure to modify network
+    rebroadcast_interval: std::time::Duration,
+}
+
+impl Default for ArcNetworkBuilder {
+    fn default() -> Self {
+        Self {
+            rebroadcast_interval: crate::rebroadcast::DEFAULT_REBROADCAST_INTERVAL,
+        }
+    }
+}
+
+impl ArcNetworkBuilder {
+    pub fn with_rebroadcast_interval(mut self, interval: std::time::Duration) -> Self {
+        self.rebroadcast_interval = interval;
+        self
+    }
 }
 
 impl<Node, Pool> NetworkBuilder<Node, Pool> for ArcNetworkBuilder
@@ -563,8 +585,36 @@ where
         pool: Pool,
     ) -> eyre::Result<Self::Network> {
         let network = ctx.network_builder().await?;
+        let rebroadcast_pool = if self.rebroadcast_interval.is_zero() {
+            None
+        } else {
+            Some(pool.clone())
+        };
         let handle = ctx.start_network(network, pool);
         info!(target: "reth::cli", enode=%handle.local_node_record(), "P2P networking initialized");
+
+        if let Some(pool) = rebroadcast_pool {
+            if let Some(txns_handle) = handle.transactions_handle().await {
+                let rebroadcaster = crate::rebroadcast::TxRebroadcaster::new(
+                    pool,
+                    txns_handle,
+                    self.rebroadcast_interval,
+                );
+                ctx.task_executor()
+                    .spawn_task(Box::pin(rebroadcaster.run()));
+                info!(
+                    target: "arc::txpool::rebroadcast",
+                    interval_secs = self.rebroadcast_interval.as_secs(),
+                    "Transaction rebroadcast task started"
+                );
+            } else {
+                warn!(
+                    target: "arc::txpool::rebroadcast",
+                    "Transaction rebroadcast disabled: no transactions handle available"
+                );
+            }
+        }
+
         Ok(handle)
     }
 }
@@ -648,6 +698,7 @@ mod tests {
             None,
             true,
             true,
+            crate::rebroadcast::DEFAULT_REBROADCAST_INTERVAL,
         );
 
         assert!(!node.rpc_cfg.enabled);
@@ -675,6 +726,7 @@ mod tests {
             None,
             true,
             true,
+            crate::rebroadcast::DEFAULT_REBROADCAST_INTERVAL,
         );
         assert!(node.addresses_denylist_config.is_enabled());
         if let AddressesDenylistConfig::Enabled {
@@ -708,6 +760,7 @@ mod tests {
             None,
             true,
             false,
+            crate::rebroadcast::DEFAULT_REBROADCAST_INTERVAL,
         );
         assert!(!node.filter_pending_txs);
     }
@@ -730,7 +783,47 @@ mod tests {
             None,
             false,
             false,
+            crate::rebroadcast::DEFAULT_REBROADCAST_INTERVAL,
         );
         assert!(!node.wait_for_payload);
+    }
+
+    #[test]
+    fn arc_node_default_rebroadcast_interval() {
+        let node = ArcNode::default();
+        assert_eq!(
+            node.rebroadcast_interval,
+            crate::rebroadcast::DEFAULT_REBROADCAST_INTERVAL
+        );
+    }
+
+    #[test]
+    fn arc_node_construction_with_rebroadcast_disabled() {
+        let node = ArcNode::new(
+            ArcRpcConfig::default(),
+            InvalidTxListConfig::default(),
+            AddressesDenylistConfig::default(),
+            None,
+            true,
+            true,
+            std::time::Duration::ZERO,
+        );
+        assert!(node.rebroadcast_interval.is_zero());
+    }
+
+    #[test]
+    fn arc_network_builder_default_interval() {
+        let builder = ArcNetworkBuilder::default();
+        assert_eq!(
+            builder.rebroadcast_interval,
+            crate::rebroadcast::DEFAULT_REBROADCAST_INTERVAL
+        );
+    }
+
+    #[test]
+    fn arc_network_builder_with_zero_disables() {
+        let builder =
+            ArcNetworkBuilder::default().with_rebroadcast_interval(std::time::Duration::ZERO);
+        assert!(builder.rebroadcast_interval.is_zero());
     }
 }

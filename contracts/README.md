@@ -2,6 +2,15 @@
 
 This directory contains Solidity contracts and tests for the Arc project, built with Foundry.
 
+## Compiler choice for genesis-deployed contracts
+
+**Forge is the canonical compiler** for every CREATE2-deployed contract in Arc genesis
+(`Memo`, `Multicall3From`, `Denylist` impl, `ProtocolConfig` impl, `ValidatorRegistry`
+impl, `PermissionedValidatorManager` impl, `GasGuzzler`, `TestToken`).
+
+The genesis builder (`contracts/scripts/ArtifactHelper.s.sol`), all CREATE2-sensitive
+tests (`tests/localdev/genesis.test.ts`) all read from `contracts/out/forge/`. 
+Hardhat's compile output is **not** consumed for any CREATE2-sensitive path.
 
 ## Foundry
 

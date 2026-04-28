@@ -16,7 +16,6 @@
 
 import { expect } from 'chai'
 import { Address, fromHex, parseEther, TransactionReceipt } from 'viem'
-import { privateKeyToAccount, generatePrivateKey } from 'viem/accounts'
 import { PublicClient, WalletClient } from '@nomicfoundation/hardhat-viem/types'
 import {
   balancesSnapshot,
@@ -45,39 +44,6 @@ describe('ProtocolConfig Smoke Tests', function () {
   // Deployed mocks
   let mockRevertingProtocolConfigAddress: Address
   let gasGuzzlerAddress: Address
-
-  // Test accounts for different scenarios
-  const testAccounts = {
-    beneficiary1: privateKeyToAccount(generatePrivateKey()),
-    beneficiary2: privateKeyToAccount(generatePrivateKey()),
-    beneficiary3: privateKeyToAccount(generatePrivateKey()),
-  }
-
-  // Helper to restore original state
-  async function restoreOriginalBeneficiary(originalBeneficiary: Address) {
-    const protocolConfig = ProtocolConfig.attach(publicClient)
-    const currentBeneficiary = await protocolConfig.read.rewardBeneficiary()
-    if (currentBeneficiary.toLowerCase() !== originalBeneficiary.toLowerCase()) {
-      await ProtocolConfig.attach(controller)
-        .write.updateRewardBeneficiary([originalBeneficiary])
-        .then((hash) => publicClient.waitForTransactionReceipt({ hash }))
-    }
-  }
-
-  // Helper to update beneficiary and verify
-  async function updateAndVerifyBeneficiary(newBeneficiary: Address): Promise<Address> {
-    const protocolConfig = ProtocolConfig.attach(publicClient)
-    const originalBeneficiary = await protocolConfig.read.rewardBeneficiary()
-
-    await ProtocolConfig.attach(controller)
-      .write.updateRewardBeneficiary([newBeneficiary])
-      .then((hash) => publicClient.waitForTransactionReceipt({ hash }))
-
-    const updatedBeneficiary = await protocolConfig.read.rewardBeneficiary()
-    expectAddressEq(updatedBeneficiary, newBeneficiary, 'Beneficiary should be updated')
-
-    return originalBeneficiary
-  }
 
   // Helper to update the block gas limit
   async function updateBlockGasLimit(newLimit: bigint): Promise<TransactionReceipt> {
@@ -236,44 +202,6 @@ describe('ProtocolConfig Smoke Tests', function () {
 
       expectAddressEq(block.miner, LOCALDEV_FEE_RECIPIENT, 'Block miner should be LOCALDEV_FEE_RECIPIENT')
     })
-
-    it('should reflect beneficiary changes in block mining', async function () {
-      const originalBeneficiary = await updateAndVerifyBeneficiary(testAccounts.beneficiary1.address)
-
-      // Verify new beneficiary is used for mining and balances
-      await sendTransactionAndVerifyBalances({
-        beneficiary: testAccounts.beneficiary1.address,
-      })
-
-      // Restore original state
-      await restoreOriginalBeneficiary(originalBeneficiary)
-    })
-
-    it('should handle multiple beneficiary updates correctly', async function () {
-      const protocolConfig = ProtocolConfig.attach(publicClient)
-      const originalBeneficiary = await protocolConfig.read.rewardBeneficiary()
-
-      // First update
-      await updateAndVerifyBeneficiary(testAccounts.beneficiary1.address)
-      await sendTransactionAndVerifyBalances({
-        beneficiary: testAccounts.beneficiary1.address,
-      })
-
-      // Second update
-      await updateAndVerifyBeneficiary(testAccounts.beneficiary2.address)
-      await sendTransactionAndVerifyBalances({
-        beneficiary: testAccounts.beneficiary2.address,
-      })
-
-      // Third update
-      await updateAndVerifyBeneficiary(testAccounts.beneficiary3.address)
-      await sendTransactionAndVerifyBalances({
-        beneficiary: testAccounts.beneficiary3.address,
-      })
-
-      // Restore original state
-      await restoreOriginalBeneficiary(originalBeneficiary)
-    })
   })
 
   describe('Fee Distribution', function () {
@@ -295,39 +223,17 @@ describe('ProtocolConfig Smoke Tests', function () {
       await updateBlockGasLimit(originalGasLimit)
     })
 
-    it('should handle legacy transactions correctly', async function () {
-      const protocolConfig = ProtocolConfig.attach(publicClient)
-      const originalBeneficiary = await protocolConfig.read.rewardBeneficiary()
-      const beneficiary = testAccounts.beneficiary1.address
-      await updateAndVerifyBeneficiary(beneficiary)
-
-      // Send transaction and verify both miner and balance changes
-      await sendTransactionAndVerifyBalances({
-        beneficiary,
-        transferAmount: parseEther('0.1'),
-        transactionType: 'legacy',
-      })
-
-      // Restore original state
-      await restoreOriginalBeneficiary(originalBeneficiary)
-    })
-
     it('should handle EIP-1559 transactions correctly', async function () {
-      const protocolConfig = ProtocolConfig.attach(publicClient)
-      const originalBeneficiary = await protocolConfig.read.rewardBeneficiary()
-      const beneficiary = testAccounts.beneficiary2.address
-      await updateAndVerifyBeneficiary(beneficiary)
-
-      // Send EIP-1559 transaction and verify both miner and balance changes
+      // Send EIP-1559 transaction and verify fee distribution to CL-provided fee recipient
       const transferAmount = parseEther('0.05')
 
       const { receipt, totalFee } = await sendTransactionAndVerifyBalances({
-        beneficiary,
+        beneficiary: LOCALDEV_FEE_RECIPIENT,
         transferAmount,
         transactionType: 'eip1559',
       })
 
-      // Verify Circle's custom fee distribution vs standard Ethereum
+      // Verify Arc's custom fee distribution vs standard Ethereum
       const gasUsed = BigInt(receipt.gasUsed)
       const effectiveGasPrice = BigInt(receipt.effectiveGasPrice || 0)
       // Access baseFeePerGas which exists on EIP-1559 receipts but isn't in standard type
@@ -349,9 +255,6 @@ describe('ProtocolConfig Smoke Tests', function () {
         )
         expect(totalFee > standardEthereumFee).to.be.true
       }
-
-      // Restore original state
-      await restoreOriginalBeneficiary(originalBeneficiary)
     })
 
     it('should use EMA base fee calculation in blocks', async function () {

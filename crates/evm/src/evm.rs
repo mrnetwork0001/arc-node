@@ -90,9 +90,7 @@ use crate::handler::ArcEvmHandler;
 use crate::opcode::{arc_network_selfdestruct, arc_network_selfdestruct_zero4};
 use crate::subcall::{SubcallContinuation, SubcallRegistry};
 use arc_execution_config::chainspec::{ArcChainSpec, BlockGasLimitProvider};
-use arc_execution_config::protocol_config::{
-    expected_gas_limit, retrieve_fee_params, retrieve_reward_beneficiary, ProtocolConfigError,
-};
+use arc_execution_config::protocol_config::{expected_gas_limit, retrieve_fee_params};
 use arc_precompiles::call_from::{CallFromPrecompile, CALL_FROM_ADDRESS};
 use arc_precompiles::precompile_provider::ArcPrecompileProvider;
 use arc_precompiles::subcall::SubcallPrecompile;
@@ -1666,23 +1664,6 @@ impl BlockExecutorFactory for ArcEvmConfig {
     }
 }
 
-/// Pick the fee recipient for the next block, given the ProtocolConfig lookup result and the
-/// CL-provided recipient. The contract value wins when explicitly set; zero or lookup failure
-/// defers to the CL.
-fn select_fee_recipient(
-    protocol_config_beneficiary: Result<Address, ProtocolConfigError<HaltReason>>,
-    cl_suggested_recipient: Address,
-) -> Address {
-    match protocol_config_beneficiary {
-        Ok(addr) if !addr.is_zero() => addr,
-        Ok(_) => cl_suggested_recipient,
-        Err(err) => {
-            tracing::warn!(error = %err, "ProtocolConfig rewardBeneficiary() failed; using CL-provided fee recipient");
-            cl_suggested_recipient
-        }
-    }
-}
-
 impl ConfigureEvm for ArcEvmConfig {
     type Primitives = <EthEvmConfig as ConfigureEvm>::Primitives;
     type Error = <EthEvmConfig as ConfigureEvm>::Error;
@@ -1725,11 +1706,6 @@ impl ConfigureEvm for ArcEvmConfig {
                 .inspect_err(|err| {
                     tracing::error!(error = ?err, "Failed to create EVM environment");
                 })?,
-        );
-
-        attributes.suggested_fee_recipient = select_fee_recipient(
-            retrieve_reward_beneficiary(&mut system_evm),
-            attributes.suggested_fee_recipient,
         );
 
         // Override the gas limit with the gas limit from the ProtocolConfig contract.
@@ -2094,9 +2070,6 @@ mod tests {
         );
         let evm_config = ArcEvmConfig::new(inner_config);
         let mut db = State::builder().build();
-
-        // ProtocolConfig contract is absent from `db`, so `retrieve_reward_beneficiary` errors
-        // and `select_fee_recipient` falls back to `attributes.suggested_fee_recipient`.
         let parent_header = Header {
             number: 1,
             gas_limit: 30_000_000,
@@ -2121,124 +2094,6 @@ mod tests {
         assert!(
             result.is_ok(),
             "builder_for_next_block should succeed when ProtocolConfig is absent"
-        );
-    }
-
-    #[test]
-    fn test_retrieve_reward_beneficiary_nonzero_address() {
-        use arc_execution_config::protocol_config::{
-            retrieve_reward_beneficiary, PROTOCOL_CONFIG_ADDRESS,
-        };
-        use revm::bytecode::opcode;
-        use revm::state::AccountInfo;
-
-        let expected = Address::repeat_byte(0xAB);
-
-        // Mock contract at PROTOCOL_CONFIG_ADDRESS that returns a non-zero address,
-        // exercising the `Ok(addr) if !addr.is_zero() => addr` branch.
-        // rewardBeneficiary() returns (address) ABI-encodes as [12 zero bytes | 20 addr bytes];
-        // MSTORE right-aligns the stack value to produce exactly that.
-        //
-        // Equivalent assembly:
-        // ```text
-        //   PUSH20 <addr>  ; push address as uint256 (zero-fills upper 12 bytes on stack)
-        //   PUSH1  0       ; memory offset for MSTORE
-        //   MSTORE         ; memory[0..32] = [12 zero bytes][20 addr bytes]
-        //   PUSH1  0x20    ; return size = 32
-        //   PUSH1  0       ; return offset
-        //   RETURN
-        // ```
-        let mut code = vec![opcode::PUSH20];
-        code.extend_from_slice(expected.as_slice());
-        code.extend_from_slice(&[opcode::PUSH1, 0x00, opcode::MSTORE]);
-        code.extend_from_slice(&[opcode::PUSH1, 0x20, opcode::PUSH1, 0x00, opcode::RETURN]);
-        let raw = Bytes::from(code);
-
-        let mut db = InMemoryDB::default();
-        db.insert_account_info(
-            PROTOCOL_CONFIG_ADDRESS,
-            AccountInfo {
-                balance: U256::ZERO,
-                nonce: 1,
-                code_hash: keccak256(&raw),
-                code: Some(Bytecode::new_raw(raw)),
-                account_id: None,
-            },
-        );
-
-        let mut evm = create_test_evm(db, ArcHardforkFlags::default());
-        assert_eq!(retrieve_reward_beneficiary(&mut evm).unwrap(), expected);
-    }
-
-    #[test]
-    fn test_retrieve_reward_beneficiary_zero_address() {
-        use arc_execution_config::protocol_config::{
-            retrieve_reward_beneficiary, PROTOCOL_CONFIG_ADDRESS,
-        };
-        use revm::bytecode::opcode;
-        use revm::state::AccountInfo;
-
-        // Mock contract returning address(0): rewardBeneficiary() ABI-encodes as 32 zero
-        // bytes, which EVM memory provides by default — no MSTORE needed.
-        //
-        // Equivalent assembly:
-        // ```text
-        //   PUSH1  0x20    ; return size = 32
-        //   PUSH1  0       ; return offset (memory[0..32] is all zeros by default)
-        //   RETURN         ; returns 32 zero bytes = abi.encode(address(0))
-        // ```
-        let raw = Bytes::from(vec![
-            opcode::PUSH1,
-            0x20,
-            opcode::PUSH1,
-            0x00,
-            opcode::RETURN,
-        ]);
-
-        let mut db = InMemoryDB::default();
-        db.insert_account_info(
-            PROTOCOL_CONFIG_ADDRESS,
-            AccountInfo {
-                balance: U256::ZERO,
-                nonce: 1,
-                code_hash: keccak256(&raw),
-                code: Some(Bytecode::new_raw(raw)),
-                account_id: None,
-            },
-        );
-
-        let mut evm = create_test_evm(db, ArcHardforkFlags::default());
-        assert_eq!(
-            retrieve_reward_beneficiary(&mut evm).unwrap(),
-            Address::ZERO
-        );
-    }
-
-    #[test]
-    fn select_fee_recipient_uses_protocol_config_when_nonzero() {
-        let pc_beneficiary = Address::repeat_byte(0x11);
-        let cl_suggested = Address::repeat_byte(0x22);
-        assert_eq!(
-            select_fee_recipient(Ok(pc_beneficiary), cl_suggested),
-            pc_beneficiary,
-        );
-    }
-
-    #[test]
-    fn select_fee_recipient_falls_back_to_cl_suggested_when_protocol_config_returns_zero() {
-        let cl_suggested = Address::repeat_byte(0x22);
-        assert_eq!(
-            select_fee_recipient(Ok(Address::ZERO), cl_suggested),
-            cl_suggested,
-        );
-    }
-
-    #[test]
-    fn select_fee_recipient_falls_back_to_cl_suggested_on_error() {
-        let cl_suggested = Address::repeat_byte(0x22);
-        assert_eq!(
-            select_fee_recipient(Err(ProtocolConfigError::EmptyOutput), cl_suggested),
-            cl_suggested,
         );
     }
 

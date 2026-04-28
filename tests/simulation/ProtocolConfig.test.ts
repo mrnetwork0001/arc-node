@@ -19,7 +19,6 @@ import hre from 'hardhat'
 import { getChain } from '../../scripts/hardhat/viem-helper'
 import {
   ProtocolConfig,
-  LOCALDEV_FEE_RECIPIENT,
   loadGenesisConfig,
   type FeeParams,
   type ConsensusParams,
@@ -65,73 +64,6 @@ describe('ProtocolConfig simulation', () => {
       ],
     })
     expect(res.results[0].status).to.be.eq('success')
-  })
-
-  describe('ProtocolConfig Network Parameter Validation', () => {
-    it('should use LOCALDEV_FEE_RECIPIENT as block miner when rewardBeneficiary is zero', async () => {
-      const { client, randomWallet, protocolConfig } = await clients()
-      const protocolConfigBeneficiary = await protocolConfig.read.rewardBeneficiary()
-      expect(protocolConfigBeneficiary).to.addressEqual(
-        zeroAddress,
-        'rewardBeneficiary should be zero address in localdev genesis',
-      )
-      const controller = await protocolConfig.read.controller()
-      // Simulate transactions without changing state
-      const result = await client.simulateBlocks({
-        blocks: [
-          {
-            calls: [
-              {
-                account: controller,
-                to: ProtocolConfig.address,
-                data: encodeFunctionData({
-                  abi: protocolConfig.abi,
-                  functionName: 'updateRewardBeneficiary',
-                  args: [randomWallet.address], // Update beneficiary to random wallet for testing
-                }),
-              },
-              // Immediately query the updated beneficiary to verify the change
-              {
-                account: controller,
-                to: ProtocolConfig.address,
-                data: encodeFunctionData({ abi: protocolConfig.abi, functionName: 'rewardBeneficiary', args: [] }),
-              },
-            ],
-          },
-        ],
-      })
-
-      // Verify simulated blocks have the correct beneficiary as miner and all calls succeed
-      expect(result).to.have.length(1)
-      const block = result[0]
-      expect(block.calls.length).to.equal(2, 'Block should have 2 calls')
-
-      // Verify all calls in this block succeeded
-      block.calls.forEach((call, callIndex) => {
-        expect(call.error).to.be.undefined
-        expect(call.status).to.equal('success', `call ${callIndex} should succeed`)
-      })
-
-      expect(block.miner).to.not.be.undefined
-      expect(block.miner).to.addressEqual(
-        LOCALDEV_FEE_RECIPIENT,
-        `Simulated block miner (${block.miner}) should use LOCALDEV_FEE_RECIPIENT`,
-      )
-
-      // verify the beneficiary read call returns the updated value
-      const readCall = block.calls[1] // Second call is the read
-      expect(readCall.data).to.not.be.undefined
-      const returnedBeneficiary = decodeFunctionResult({
-        abi: protocolConfig.abi,
-        functionName: 'rewardBeneficiary',
-        data: schemaHex.parse(readCall.data),
-      })
-      // Verify the contract state was actually updated
-      expect(returnedBeneficiary).to.addressEqual(
-        randomWallet.address,
-        'Contract should return updated beneficiary address',
-      )
-    })
   })
 
   describe('ProtocolConfig role wallet validation', () => {

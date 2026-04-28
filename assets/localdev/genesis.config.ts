@@ -18,7 +18,7 @@ import fs from 'fs'
 import { z } from 'zod'
 import { parseEther, parseGwei, toHex, zeroAddress } from 'viem'
 import { privateKeyToAccount } from 'viem/accounts'
-import { createBuilderContext, buildGenesis, GenesisConfig, schemaGenesisConfig } from '../../scripts/genesis'
+import { createBuilderContext, buildGenesis, GenesisConfig, schemaGenesisConfig, localdevFeeRecipient } from '../../scripts/genesis'
 import { bigintReplacer } from '../../scripts/genesis/types'
 import { LocalDevAccountCreator } from '../../scripts/genesis/AccountCreator'
 
@@ -73,7 +73,7 @@ const build = async (options: z.infer<typeof localBuilderOptionsSchema>) => {
 
   const config: GenesisConfig = {
     timestamp: 1763620028n,
-    coinbase: proxyAdmin.address,
+    coinbase: localdevFeeRecipient,
     hardforks: {
       zero3Block: 0,
       ...hardforks,

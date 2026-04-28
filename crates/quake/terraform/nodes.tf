@@ -10,6 +10,15 @@ resource "aws_instance" "node" {
   vpc_security_group_ids = [aws_security_group.network_sg[local.node_primary_network[var.node_names[count.index]]].id]
   iam_instance_profile   = local.ec2_profile_name
 
+  dynamic "root_block_device" {
+    for_each = var.node_volume_size != null ? [var.node_volume_size] : []
+    iterator = vol
+    content {
+      volume_size = vol.value
+      volume_type = "gp3"
+    }
+  }
+
   metadata_options {
     http_endpoint               = "enabled"
     http_tokens                 = "required" # IMDSv2 only

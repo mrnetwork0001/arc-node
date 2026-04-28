@@ -1075,6 +1075,8 @@ impl Testnet {
                 yes,
                 infra_args.node_size.as_deref(),
                 infra_args.cc_size.as_deref(),
+                infra_args.node_disk_gb,
+                infra_args.cc_disk_gb,
             ),
             RemoteSubcommand::Status => {
                 info_mod::print_remote_infra_data(&self.infra_data);

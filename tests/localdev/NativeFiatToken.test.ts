@@ -23,7 +23,6 @@ import {
   LOCALDEV_FEE_RECIPIENT,
   getClients,
 } from '../helpers'
-import { ProtocolConfig } from '../helpers/ProtocolConfig'
 import { signPermit, USDC } from '../helpers/FiatToken'
 import { NativeCoinControl, ERR_BLOCKED_ADDRESS } from '../helpers/NativeCoinControl'
 import {
@@ -443,17 +442,12 @@ describe('NativeFiatToken', () => {
       const { client, operator, sender, createRandWallet } = await clients()
       const receiver = await createRandWallet().then((x) => x.account)
 
-      // When rewardBeneficiary is zero, fees go to the genesis coinbase
-      const protocolConfig = ProtocolConfig.attach(client)
-      const configBeneficiary = await protocolConfig.read.rewardBeneficiary()
-      const beneficiary = configBeneficiary === zeroAddress ? LOCALDEV_FEE_RECIPIENT : configBeneficiary
-
       // Blocklist the receiver address first
       await USDC.attach(operator).write.blacklist([receiver.address]).then(ReceiptVerifier.waitSuccess)
 
       // Setup balance tracking AFTER blocklist operation to avoid interference
       const balances = await balancesSnapshot(client, {
-        beneficiary,
+        beneficiary: LOCALDEV_FEE_RECIPIENT,
         sender: sender.account.address,
         receiver: receiver.address,
       })

@@ -103,12 +103,9 @@ async fn test_engine_common(engine: &Engine, initial_block_number: &str) {
     );
 
     // Test generate new block
+    let fee_recipient = Address::repeat_byte(0xBE);
     let block = engine
-        .generate_block(
-            &block.unwrap(),
-            Engine::timestamp_now() + 1,
-            &Address::default(),
-        )
+        .generate_block(&block.unwrap(), Engine::timestamp_now() + 1, &fee_recipient)
         .await
         .expect("Failed to generate new block");
     assert!(block.payload_inner.payload_inner.block_hash.len() == 32);
@@ -162,6 +159,7 @@ async fn test_engine() {
         None,
         true,
         true,
+        std::time::Duration::from_secs(0), // disable rebroadcast in integration tests
     );
     let node_handle = NodeBuilder::new(node_config)
         .testing_node(executor)

@@ -121,15 +121,15 @@ pub(crate) mod historical_queries;
 pub(crate) mod snapshot;
 
 // Test modules - must come after type definitions so they can use them
-mod arc_node;
+pub(crate) mod arc_node;
 mod health;
 mod mempool;
-mod mesh;
+pub(crate) mod mesh;
 mod mev;
 mod net;
 mod perf;
 mod probe;
-mod sanity;
+pub(crate) mod sanity;
 mod sync;
 mod tx;
 

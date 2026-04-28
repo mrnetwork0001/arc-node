@@ -18,7 +18,7 @@
 
 use crate::ArcEnvironment;
 use alloy_eips::eip7685::{Requests, RequestsOrHash};
-use alloy_primitives::{Address, B256};
+use alloy_primitives::{address, B256};
 use alloy_rpc_types_engine::{
     CancunPayloadFields, ExecutionData, ExecutionPayload, ExecutionPayloadSidecar,
     ExecutionPayloadV1, ExecutionPayloadV3, ForkchoiceState, PayloadAttributes, PayloadStatusEnum,
@@ -65,7 +65,7 @@ pub(crate) async fn build_payload_for_next_block_with_client<C: EngineApiClient<
     let payload_attributes = PayloadAttributes {
         timestamp: current_block.timestamp + 1,
         prev_randao: B256::random(),
-        suggested_fee_recipient: Address::ZERO,
+        suggested_fee_recipient: address!("0x65E0a200006D4FF91bD59F9694220dafc49dbBC1"),
         withdrawals: Some(vec![]),
         parent_beacon_block_root: Some(parent_beacon_block_root),
     };

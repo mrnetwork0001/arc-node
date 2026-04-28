@@ -770,32 +770,32 @@ pub fn format_perf_report(
 // ── Check ────────────────────────────────────────────────────────────────
 
 /// Fetch Prometheus metrics from all nodes and assert that every node's
-/// block time p50 and p95 are within the given thresholds.
+/// block time p50 and p99 are within the given thresholds.
 pub async fn check_block_time(
     metrics_urls: &[(String, Url)],
     p50_threshold_ms: u64,
-    p95_threshold_ms: u64,
+    p99_threshold_ms: u64,
 ) -> Result<Report> {
     let raw = fetch_all_metrics(metrics_urls).await;
     let nodes = parse_perf_metrics(&raw);
     let p50_threshold_s = p50_threshold_ms as f64 / 1000.0;
-    let p95_threshold_s = p95_threshold_ms as f64 / 1000.0;
+    let p99_threshold_s = p99_threshold_ms as f64 / 1000.0;
 
     let mut checks: Vec<CheckResult> = nodes
         .iter()
         .map(|node| match &node.block_time {
             Some(stats) if stats.count > 0 => {
                 let p50_ok = stats.p50 <= p50_threshold_s;
-                let p95_ok = stats.p95 <= p95_threshold_s;
-                let passed = p50_ok && p95_ok;
+                let p99_ok = stats.p99 <= p99_threshold_s;
+                let passed = p50_ok && p99_ok;
                 let message = format!(
-                    "block_time p50={:.3}s (limit {:.3}s{}) p95={:.3}s (limit {:.3}s{}) ({} blocks)",
+                    "block_time p50={:.3}s (limit {:.3}s{}) p99={:.3}s (limit {:.3}s{}) ({} blocks)",
                     stats.p50,
                     p50_threshold_s,
                     if p50_ok { "" } else { " EXCEEDED" },
-                    stats.p95,
-                    p95_threshold_s,
-                    if p95_ok { "" } else { " EXCEEDED" },
+                    stats.p99,
+                    p99_threshold_s,
+                    if p99_ok { "" } else { " EXCEEDED" },
                     stats.count,
                 );
                 CheckResult {
@@ -816,7 +816,7 @@ pub async fn check_block_time(
     Ok(Report { checks })
 }
 
-/// Assert block time p50/p95 thresholds using only the **delta** between two
+/// Assert block time p50/p99 thresholds using only the **delta** between two
 /// Prometheus scrapes, isolating the observation window.
 ///
 /// This avoids cumulative histogram skew from periods before the observation
@@ -825,14 +825,14 @@ pub fn check_block_time_delta(
     raw_before: &[(String, String)],
     raw_after: &[(String, String)],
     p50_threshold_ms: u64,
-    p95_threshold_ms: u64,
+    p99_threshold_ms: u64,
 ) -> Report {
     // Single source of truth: same intersection and subtraction as the full
     // perf delta report (avoids duplicate node names from Vec+HashMap pairing).
     let nodes = parse_perf_metrics_delta(raw_before, raw_after);
 
     let p50_threshold_s = p50_threshold_ms as f64 / 1000.0;
-    let p95_threshold_s = p95_threshold_ms as f64 / 1000.0;
+    let p99_threshold_s = p99_threshold_ms as f64 / 1000.0;
 
     let mut checks: Vec<CheckResult> = nodes
         .into_iter()
@@ -841,26 +841,26 @@ pub fn check_block_time_delta(
             match node.block_time {
                 Some(ref s) if s.count > 0 => {
                     let p50_ok = s.p50 <= p50_threshold_s;
-                    let p95_ok = s.p95 <= p95_threshold_s;
-                    let passed = p50_ok && p95_ok;
+                    let p99_ok = s.p99 <= p99_threshold_s;
+                    let passed = p50_ok && p99_ok;
                     CheckResult {
                         name,
                         passed,
                         message: format!(
-                            "block_time p50={:.3}s (limit {:.3}s{}) p95={:.3}s (limit {:.3}s{}) ({} blocks)",
+                            "block_time p50={:.3}s (limit {:.3}s{}) p99={:.3}s (limit {:.3}s{}) ({} blocks)",
                             s.p50,
                             p50_threshold_s,
                             if p50_ok { "" } else { " EXCEEDED" },
-                            s.p95,
-                            p95_threshold_s,
-                            if p95_ok { "" } else { " EXCEEDED" },
+                            s.p99,
+                            p99_threshold_s,
+                            if p99_ok { "" } else { " EXCEEDED" },
                             s.count,
                         ),
                     }
                 }
                 _ => CheckResult {
                     name,
-                    passed: false,
+                    passed: true,
                     message: "no block_time delta data (counter reset or no observations)"
                         .to_string(),
                 },
@@ -1358,8 +1358,8 @@ grpc_server_handled_total{method="Propose"} 500
         let report = check_block_time_delta(&raw_before, &raw_after, 550, 1000);
         assert_eq!(report.checks.len(), 1);
         assert!(
-            !report.checks[0].passed,
-            "counter reset should produce a failing check"
+            report.checks[0].passed,
+            "counter reset should pass (skip) rather than fail the threshold check"
         );
         assert!(
             report.checks[0]

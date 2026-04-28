@@ -17,13 +17,14 @@
 import hre from 'hardhat'
 import { createWalletClient, getChain } from '../../../scripts/hardhat/viem-helper'
 import { LocalDevAccountCreator } from '../../../scripts/genesis/AccountCreator'
+import { localdevFeeRecipient } from '../../../scripts/genesis'
 import { Address } from 'viem'
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts'
 import { expect } from 'chai'
 
-// Fee recipient used by all localdev validators via --suggested-fee-recipient; must match
-// cl_suggested_fee_recipient in crates/quake/scenarios/localdev.toml.
-export const LOCALDEV_FEE_RECIPIENT: Address = '0x65E0a200006D4FF91bD59F9694220dafc49dbBC1'
+// Re-export the canonical fee recipient from scripts/genesis/addresses.ts.
+// Used as genesis coinbase and cl_suggested_fee_recipient across all localdev validators.
+export const LOCALDEV_FEE_RECIPIENT: Address = localdevFeeRecipient
 
 /**
  * Get the clients for the localdev network

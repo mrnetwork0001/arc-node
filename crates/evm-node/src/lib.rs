@@ -22,6 +22,7 @@
 pub mod engine;
 pub mod node;
 pub mod payload;
+pub mod rebroadcast;
 pub mod rpc;
 pub mod rpc_middleware;
 

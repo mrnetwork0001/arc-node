@@ -31,21 +31,15 @@ FROM chef AS builder
 RUN printf 'arc:x:999:999::/data:/bin/false\n' > /tmp/passwd && \
     printf 'arc:x:999:\n' > /tmp/group
 
+# Build-time args that are stable across commits — placed before dep-cook so the
+# cook layer's S3 cache entry survives commits that only change git metadata.
 ARG BUILD_PROFILE=release
 ARG RUSTFLAGS=""
-ARG GIT_COMMIT_HASH="0000000000000000000000000000000000000000"
-ARG GIT_VERSION="v0.0.0-unknown"
-ARG GIT_SHORT_HASH="00000000"
-ARG ARC_IDEMPOTENT_BUILD=false
 
 ENV CARGO_HOME=/usr/local/cargo
 ENV CARGO_NET_GIT_FETCH_WITH_CLI=true
 ENV CARGO_HTTP_CAINFO=/etc/ssl/certs/ca-certificates.crt
 ENV RUSTFLAGS=$RUSTFLAGS
-ENV VERGEN_GIT_SHA=$GIT_COMMIT_HASH
-ENV VERGEN_GIT_DESCRIBE=$GIT_VERSION
-ENV VERGEN_GIT_SHA_SHORT=$GIT_SHORT_HASH
-ENV ARC_IDEMPOTENT_BUILD=$ARC_IDEMPOTENT_BUILD
 
 WORKDIR /app
 
@@ -54,6 +48,17 @@ RUN --mount=type=cache,id=bench-cargo-registry,sharing=locked,target=/usr/local/
     --mount=type=cache,id=bench-cargo-git,sharing=locked,target=/usr/local/cargo/git \
     --mount=type=cache,id=bench-cargo-target,sharing=locked,target=/app/target \
     cargo chef cook --bin arc-engine-bench --profile $BUILD_PROFILE --recipe-path arc-engine-bench-recipe.json
+
+# Per-commit git version args come after dep-cook — moving them here prevents the
+# new commit hash from busting the cook layer's S3 cache key on every push.
+ARG GIT_COMMIT_HASH="0000000000000000000000000000000000000000"
+ARG GIT_VERSION="v0.0.0-unknown"
+ARG GIT_SHORT_HASH="00000000"
+ARG ARC_IDEMPOTENT_BUILD=false
+ENV VERGEN_GIT_SHA=$GIT_COMMIT_HASH
+ENV VERGEN_GIT_DESCRIBE=$GIT_VERSION
+ENV VERGEN_GIT_SHA_SHORT=$GIT_SHORT_HASH
+ENV ARC_IDEMPOTENT_BUILD=$ARC_IDEMPOTENT_BUILD
 
 COPY . .
 

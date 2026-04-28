@@ -56,8 +56,8 @@ const MAX_RECONNECT_BACKOFF: Duration = Duration::from_secs(60);
 #[cfg_attr(any(test, feature = "mocks"), mockall::automock)]
 #[async_trait]
 pub trait PersistenceMeter: Send + Sync {
-    /// Block until `block_number` (minus the configured threshold) has been
-    /// persisted by the execution layer. Returns immediately if already satisfied.
+    /// Block until the canonical-minus-persisted gap for `block_number` falls
+    /// below the configured threshold. Returns immediately if already satisfied.
     /// Returns `Err` on timeout
     async fn wait_for_persisted_block(
         &self,
@@ -122,9 +122,9 @@ struct SharedState {
 ///
 /// A background task maintains the subscription connection, updates an atomic
 /// counter on each notification, and wakes any waiters via [`Notify`]. This
-/// allows [`wait_for_persisted_block`] to return immediately when the target
-/// block is already persisted, and multiple callers can wait concurrently
-/// without contending on a lock.
+/// allows [`wait_for_persisted_block`] to return immediately when the
+/// canonical-minus-persisted gap is already below the configured threshold,
+/// and multiple callers can wait concurrently without contending on a lock.
 ///
 /// In the background, a task will maintain the connection, reconnecting as needed.
 /// When reconnecting, the internal [`subscription_status`] will transition to [`SUBSCRIPTION_STATUS_RECONNECTING`]
@@ -137,7 +137,8 @@ struct SharedState {
 /// counter but backpressure remains suspended until the subscription is live.
 pub struct PersistedBlockMeter {
     shared: Arc<SharedState>,
-    /// Number of blocks the EL may lag behind before backpressure applies.
+    /// Backpressure threshold. Backpressure applies when the
+    /// canonical-minus-persisted gap reaches this value.
     persistence_backpressure_threshold: u64,
     /// Background subscription reader; aborted on drop.
     _background: tokio::task::JoinHandle<()>,
@@ -235,7 +236,6 @@ impl PersistenceMeter for PersistedBlockMeter {
         block_number: u64,
         timeout: Duration,
     ) -> eyre::Result<()> {
-        let target = block_number.saturating_sub(self.persistence_backpressure_threshold);
         let started_at = Instant::now();
 
         loop {
@@ -254,8 +254,9 @@ impl PersistenceMeter for PersistedBlockMeter {
             }
 
             let current = self.shared.last_persisted_block.load(Ordering::Acquire);
-            // If we're within the configured threshold, proceed
-            if current >= target {
+            let gap = block_number.saturating_sub(current);
+            // If we're below the configured threshold, proceed.
+            if gap < self.persistence_backpressure_threshold {
                 debug!(
                     requested_block = block_number,
                     persisted_block = current,
@@ -551,7 +552,7 @@ mod tests {
     #[tokio::test]
     async fn create_with_fallback_suspends_backpressure_on_connection_failure() {
         let endpoint = SubscriptionEndpoint::Ws {
-            url: Url::parse("ws://192.0.2.1:1").unwrap(), // unreachable
+            url: Url::parse("ws://127.0.0.1:1").unwrap(), // closed port → fail-fast ECONNREFUSED
         };
         let meter = create_with_fallback(true, Some(&endpoint), 5).await;
         assert!(meter
@@ -563,7 +564,7 @@ mod tests {
     #[tokio::test]
     async fn create_retries_on_unreachable_endpoint() {
         let endpoint = SubscriptionEndpoint::Ws {
-            url: Url::parse("ws://192.0.2.1:1").unwrap(),
+            url: Url::parse("ws://127.0.0.1:1").unwrap(),
         };
         let meter = create(&endpoint, 5).await;
         // Initial connection failed — backpressure suspended (not ACTIVE)
@@ -581,7 +582,7 @@ mod tests {
             .last_persisted_block
             .store(100, Ordering::Release);
 
-        // block_number=10, threshold=5, target=5 — persisted=100 >= 5
+        // gap=0 (saturating) < threshold=5
         assert!(meter
             .wait_for_persisted_block(10, TEST_TIMEOUT)
             .await
@@ -596,11 +597,24 @@ mod tests {
             .last_persisted_block
             .store(0, Ordering::Release);
 
-        // block_number=5, threshold=10, target=5.saturating_sub(10)=0 — persisted=0 >= 0
+        // gap=5 < threshold=10
         assert!(meter
             .wait_for_persisted_block(5, TEST_TIMEOUT)
             .await
             .is_ok());
+    }
+
+    #[tokio::test]
+    async fn wait_enforces_backpressure_at_exact_threshold() {
+        let meter = PersistedBlockMeter::test_instance(16);
+        meter
+            .shared
+            .last_persisted_block
+            .store(84, Ordering::Release);
+
+        // gap=16 equals threshold=16, so backpressure must apply.
+        let result = meter.wait_for_persisted_block(100, SHORT_TIMEOUT).await;
+        assert!(result.is_err());
     }
 
     #[tokio::test]
@@ -689,7 +703,7 @@ mod tests {
 
     #[tokio::test]
     async fn wait_wakes_up_on_notify() {
-        let meter = PersistedBlockMeter::test_instance(0);
+        let meter = PersistedBlockMeter::test_instance(2);
         meter
             .shared
             .last_persisted_block
@@ -703,7 +717,7 @@ mod tests {
         });
 
         assert!(meter
-            .wait_for_persisted_block(50, TEST_TIMEOUT)
+            .wait_for_persisted_block(51, TEST_TIMEOUT)
             .await
             .is_ok());
     }

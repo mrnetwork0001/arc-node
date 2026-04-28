@@ -75,7 +75,9 @@ impl Action for ProduceInvalidBlock {
             let payload_attributes = PayloadAttributes {
                 timestamp: next_timestamp,
                 prev_randao: B256::random(),
-                suggested_fee_recipient: alloy_primitives::Address::ZERO,
+                suggested_fee_recipient: alloy_primitives::address!(
+                    "0x65E0a200006D4FF91bD59F9694220dafc49dbBC1"
+                ),
                 withdrawals: Some(vec![]),
                 parent_beacon_block_root: Some(B256::ZERO),
             };

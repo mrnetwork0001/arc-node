@@ -47,7 +47,7 @@
 //! | `strict_mesh`       | `true`           | Enforce mesh tier expectations                    |
 //! | `mesh_verbose`      | `true`           | Print full `quake info mesh`-style report before mesh checks |
 //! | `block_time_p50_ms` | `550`            | Fail if any node's p50 block time exceeds this    |
-//! | `block_time_p95_ms` | `1000`           | Fail if any node's p95 block time exceeds this    |
+//! | `block_time_p99_ms` | `1000`           | Fail if any node's p99 block time exceeds this    |
 //!
 //! # Usage
 //!
@@ -79,7 +79,7 @@ const DEFAULT_DURATION_S: u64 = 60;
 const DEFAULT_LOAD_RATE: u64 = 50;
 const DEFAULT_LOAD_MIX: &str = "transfer=100";
 const DEFAULT_P50_MS: u64 = 550;
-const DEFAULT_P95_MS: u64 = 1000;
+const DEFAULT_P99_MS: u64 = 1000;
 const MIN_DURATION_WARNING_S: u64 = 30;
 
 // ── Load helpers ────────────────────────────────────────────────────────
@@ -87,7 +87,7 @@ const MIN_DURATION_WARNING_S: u64 = 30;
 /// Build a spammer::Config for local load generation.
 ///
 /// Uses SpammerArgs with CLI-matching defaults, overriding rate, time, and mix.
-fn build_spammer_config(
+pub(crate) fn build_spammer_config(
     rate: u64,
     duration_s: u64,
     mix: &str,
@@ -124,7 +124,7 @@ fn build_spammer_config(
 }
 
 /// Build CLI args for remote load generation (passed to `quake remote load`).
-fn build_remote_load_args(
+pub(crate) fn build_remote_load_args(
     rate: u64,
     duration_s: u64,
     mix: &str,
@@ -231,10 +231,10 @@ fn basic_test<'a>(
             .get_or("block_time_p50_ms", &DEFAULT_P50_MS.to_string())
             .parse()
             .unwrap_or(DEFAULT_P50_MS);
-        let p95_ms: u64 = params
-            .get_or("block_time_p95_ms", &DEFAULT_P95_MS.to_string())
+        let p99_ms: u64 = params
+            .get_or("block_time_p99_ms", &DEFAULT_P99_MS.to_string())
             .parse()
-            .unwrap_or(DEFAULT_P95_MS);
+            .unwrap_or(DEFAULT_P99_MS);
 
         let load_targets: Vec<String> = load_targets_str
             .split(',')
@@ -266,7 +266,7 @@ fn basic_test<'a>(
             println!("  targets:    all nodes");
         }
         println!("  mesh:       strict={strict_mesh}, full_report={mesh_verbose}");
-        println!("  perf:       p50 < {p50_ms}ms, p95 < {p95_ms}ms");
+        println!("  perf:       p50 < {p50_ms}ms, p99 < {p99_ms}ms");
         println!("─────────────────────────────────────────────────────\n");
 
         let mut health_checks: Vec<CheckResult> = Vec::new();
@@ -363,7 +363,7 @@ fn basic_test<'a>(
 
         // ── Performance (delta between scrapes) ────────────────────
         let perf_report =
-            arc_checks::check_block_time_delta(&raw_before, &raw_after, p50_ms, p95_ms);
+            arc_checks::check_block_time_delta(&raw_before, &raw_after, p50_ms, p99_ms);
         println!("\n── Performance check ────────────────────────────────");
         for check in &perf_report.checks {
             let marker = if check.passed { "✓" } else { "✗" };

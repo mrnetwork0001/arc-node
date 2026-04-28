@@ -8,15 +8,16 @@ Arc is an open, EVM-compatible Layer-1 blockchain. Anyone can run an Arc node �
 - **Executes every transaction** — Every transaction is re-executed locally through the EVM. Your node maintains its own copy of the complete blockchain state;
 - **Exposes a local RPC endpoint** — Your node provides a standard Ethereum JSON-RPC API (`http://localhost:8545`) for querying blocks, balances, and transactions, and for submitting calls directly against your own verified state.
 
-## Quick Start
-
 An Arc node is composed of two processes:
 
 - **Execution Layer (EL)**: executes finalized transactions and maintains the state of the blockchain;
 - **Consensus Layer (CL)**: fetches finalized blocks, verifies their cryptographic signatures, and passes them to the EL for execution.
 
-Refer to the [installation](installation.md) instructions to install
-`arc-node-execution` (EL) and `arc-node-consensus` (CL).
+You can run a node using [binaries](#binaries) or [Docker](#docker).
+Refer to the [installation](installation.md) instructions to obtain the
+binaries or Docker images.
+
+## Binaries
 
 ### Configure paths
 
@@ -203,12 +204,131 @@ If it remains `0x0`, check the logs of the consensus layer for errors.
 > If the address and port of the HTTP endpoint are configured differently than
 > the above example, adapt the command accordingly.
 
-> **Docker:** For running with Docker Compose instead of binaries, see
-> [Running an Arc Node with Docker](running-an-arc-node-docker.md).
+## Docker
+
+As an alternative to running binaries directly, you can run an Arc node
+using Docker containers. See [Installation: Docker](installation.md#docker)
+for how to obtain the images.
+
+### Prerequisites
+
+- [Docker Engine](https://docs.docker.com/engine/install/) 24+ with BuildKit
+- [Docker Compose](https://docs.docker.com/compose/install/) v2
+- Meets the [system requirements](#system-requirements)
+
+### Set environment variables
+
+The compose file reads images from environment variables. Set the version,
+data directory, and image references before running any `docker compose`
+command. Refer to the [Versions](installation.md#versions) table for the
+current release:
+
+```sh
+export ARC_VERSION=<version>
+export ARC_HOME=~/.arc
+```
+
+If you pulled pre-built images from Cloudsmith:
+
+```sh
+export ARC_EXECUTION_IMAGE=docker.cloudsmith.io/circle/arc-network/arc-execution:$ARC_VERSION
+export ARC_CONSENSUS_IMAGE=docker.cloudsmith.io/circle/arc-network/arc-consensus:$ARC_VERSION
+```
+
+If you built the images locally:
+
+```sh
+export ARC_EXECUTION_IMAGE=arc-execution:$ARC_VERSION
+export ARC_CONSENSUS_IMAGE=arc-consensus:$ARC_VERSION
+```
+
+### Prepare data directory
+
+Create the `$ARC_HOME` directory on the host before running Docker Compose.
+If it doesn't exist, Docker will create it as root and the `arc-snapshots`
+container will fail with permission errors:
+
+```sh
+mkdir -p "${ARC_HOME:-$HOME/.arc}"
+```
+
+### Download the compose file
+
+Download `docker-compose.yml` into a working directory:
+
+```sh
+curl -O https://raw.githubusercontent.com/circlefin/arc-node/v${ARC_VERSION}/deployments/docker-compose.yml
+```
+
+### Start
+
+Run from the directory containing `docker-compose.yml`:
+
+```sh
+docker compose up -d
+```
+
+On the first run, init containers automatically:
+
+1. Download the latest testnet snapshots (~84 GB compressed — see
+   [download sizes](#download-snapshots) for details)
+2. Initialize the consensus layer private key
+3. Prepare the shared IPC socket volume
+
+Subsequent runs detect that initialization is already complete and start
+immediately.
+
+> The init container runs as root so it can set file ownership for the
+> main services (UID 999). No manual `chown` is needed.
+
+### Verify
+
+On the first run, wait for the init containers to finish downloading snapshots
+(`docker compose logs -f arc-snapshots`). Once the EL and CL containers start,
+wait about 30 seconds, then check the latest block height:
+
+```sh
+curl -s -X POST http://localhost:8545 \
+  -H "Content-Type: application/json" \
+  -d '{ "jsonrpc": "2.0", "method": "eth_blockNumber", "params": [], "id": 1}'
+```
+
+The `result` field should increase over time as the node catches up with the
+network. If it remains `0x0`, check logs:
+
+```sh
+docker compose logs -f
+```
+
+### Docker monitoring
+
+The containers expose Prometheus metrics on the host:
+
+| Endpoint | Description |
+|----------|-------------|
+| `localhost:9001/metrics` | Execution Layer metrics |
+| `localhost:29000/metrics` | Consensus Layer metrics |
+
+### Stop
+
+```sh
+docker compose down
+```
+
+Node data persists in `~/.arc/` (or the path set by `ARC_HOME`). To remove
+all data and start fresh:
+
+```sh
+docker compose down -v   # also removes the named sockets volume
+rm -rf ~/.arc
+```
+
+> **Warning:** This permanently deletes the consensus layer private key
+> (network identity). It cannot be recovered.
 
 ## Separated hosts
 
-The [Quick Start](#quick-start) section describes the setup of the execution
+The [Binaries](#binaries) section describes the setup of the execution
 (EL) and consensus (CL) layers running in the same host.
 The two processes interact via Inter-Process Communication (IPC),
 namely using local sockets to which both processes have read and write access.

@@ -252,6 +252,18 @@ struct ArcExtraCli {
     )]
     arc_hide_pending_txs: bool,
 
+    /// Interval in seconds between transaction rebroadcast rounds.
+    ///
+    /// Pending transactions are periodically re-announced to all peers to recover
+    /// from missed gossip. Set to 0 to disable.
+    #[arg(
+        long = "txpool.rebroadcast-interval",
+        value_name = "SECONDS",
+        default_value_t = 60,
+        help_heading = "Transaction pool"
+    )]
+    txpool_rebroadcast_interval: u64,
+
     /// Profiling server bind address.
     #[arg(
         long = "pprof.addr",
@@ -463,6 +475,8 @@ fn main() {
 
             let wait_for_payload = ext.wait_for_payload;
             let filter_pending_txs = ext.arc_hide_pending_txs;
+            let rebroadcast_interval =
+                std::time::Duration::from_secs(ext.txpool_rebroadcast_interval);
             let handle = builder
                 .node(ArcNode::new(
                     arc_rpc_cfg,
@@ -471,6 +485,7 @@ fn main() {
                     payload_builder_deadline_ms,
                     wait_for_payload,
                     filter_pending_txs,
+                    rebroadcast_interval,
                 ))
                 .launch_with_debug_capabilities()
                 .await?;
@@ -1127,5 +1142,47 @@ mod tests {
             !translated.iter().any(|s| s.starts_with("--datadir")),
             "dump-genesis must not receive --datadir"
         );
+    }
+
+    #[test]
+    fn test_txpool_rebroadcast_interval_default() {
+        let cli = ArcCli::try_parse_from(["arc-node-execution", "node"]).unwrap();
+        if let Commands::Node(node_cmd) = cli.inner.command {
+            assert_eq!(node_cmd.ext.txpool_rebroadcast_interval, 60);
+        } else {
+            panic!("Expected Node command");
+        }
+    }
+
+    #[test]
+    fn test_txpool_rebroadcast_interval_custom() {
+        let cli = ArcCli::try_parse_from([
+            "arc-node-execution",
+            "node",
+            "--txpool.rebroadcast-interval",
+            "120",
+        ])
+        .unwrap();
+        if let Commands::Node(node_cmd) = cli.inner.command {
+            assert_eq!(node_cmd.ext.txpool_rebroadcast_interval, 120);
+        } else {
+            panic!("Expected Node command");
+        }
+    }
+
+    #[test]
+    fn test_txpool_rebroadcast_interval_zero_disables() {
+        let cli = ArcCli::try_parse_from([
+            "arc-node-execution",
+            "node",
+            "--txpool.rebroadcast-interval",
+            "0",
+        ])
+        .unwrap();
+        if let Commands::Node(node_cmd) = cli.inner.command {
+            assert_eq!(node_cmd.ext.txpool_rebroadcast_interval, 0);
+        } else {
+            panic!("Expected Node command");
+        }
     }
 }

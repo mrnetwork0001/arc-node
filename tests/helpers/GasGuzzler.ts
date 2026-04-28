@@ -18,8 +18,17 @@ import hre from 'hardhat'
 import { Account, Address, Chain, Client, getContract, Transport } from 'viem'
 import { KeyedClient } from './client-extension'
 import { PublicClient, WalletClient } from '@nomicfoundation/hardhat-viem/types'
+import { readForgeArtifactSync } from './forge-artifact'
 
-export const gasGuzzlerArtifact = hre.artifacts.readArtifactSync('GasGuzzler')
+// ABI is sourced from Hardhat to carry the full typed interface used by test
+// helpers; bytecode/deployedBytecode come from Forge because genesis pins the
+// Forge-compiled code at the predicted CREATE2 address.
+const forge = readForgeArtifactSync('GasGuzzler')
+export const gasGuzzlerArtifact = {
+  abi: hre.artifacts.readArtifactSync('GasGuzzler').abi,
+  bytecode: forge.bytecode,
+  deployedBytecode: forge.deployedBytecode,
+}
 
 export class GasGuzzler {
   static deploy = async (wallet: WalletClient, client: PublicClient) => {

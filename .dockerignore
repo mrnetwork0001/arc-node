@@ -57,10 +57,17 @@ docker-compose*
 .dockerignore
 docker-bake.hcl
 
-# CI/CD
+# CI/CD and tooling
 .github/
+.claude/
 .gitlab-ci.yml
 .travis.yml
+atlantis.yaml
+
+# JS tooling (not needed for Rust builds)
+package.json
+package-lock.json
+k6/
 
 # Logs
 *.log

@@ -16,7 +16,7 @@
 
 pragma solidity ^0.8.29;
 
-import {Addresses} from "../../scripts/Addresses.sol";
+import {Precompiles} from "../Precompiles.sol";
 
 /**
  * @title PrecompileCallCode
@@ -40,7 +40,7 @@ contract PrecompileCallCode {
         bool success;
         
         // Get the precompile address
-        address target = Addresses.NATIVE_COIN_AUTHORITY;
+        address target = Precompiles.NATIVE_COIN_AUTHORITY;
         
         // Use assembly to perform CALLCODE and bubble up errors
         assembly {

@@ -55,6 +55,7 @@ mod node;
 mod nodekey;
 mod nodes;
 mod perturb;
+mod report;
 mod rpc;
 mod setup;
 mod shell;
@@ -285,6 +286,41 @@ enum Commands {
         #[arg(short = 'c', long, default_value_t = 1)]
         count: usize,
     },
+    /// Generate a network testing report (mesh, health, perf, sanity, sync).
+    ///
+    /// Collects metrics from a running testnet, optionally runs sanity phases
+    /// and sync-speed tests, then writes a structured markdown report.
+    ///
+    /// Parameters (via `--set key=value`):
+    ///
+    ///   Key                Default              Description
+    ///   ─────────────────  ───────────────────  ─────────────────────────────────────
+    ///   warmup_s           30                   Seconds before first Prometheus scrape
+    ///   duration_s         60                   Observation window / load duration
+    ///   load_rate          50                   TPS during observation (0 = no load)
+    ///   load_targets       RPC_NODES            Node names and/or [node_groups] selectors (default group)
+    ///   load_mix           transfer=100         Tx type mix
+    ///   block_time_p50_ms  550                  Max p50 block time threshold for validators
+    ///   block_time_p99_ms  1000                 Max p99 block time threshold for validators
+    ///   sanity             true                 Run sanity phases
+    ///   sync_speed         true                 Run sync speed test (destructive)
+    ///   arc_nodes          ARC_NODES group      Sanity target nodes (names and/or [node_groups])
+    ///   snapshot_provider  full-circle-5        Snapshot source node
+    ///   reference          validator-blue       Reference node for tip height
+    ///   sync_nodes         full-quicknode-1     Nodes to sync-test
+    ///   sync_min_bps       7.0                  Min avg blocks/sec to pass
+    ///   sync_timeout_s     180                  Max sync measurement duration
+    ///   sync_downtime_s    120                  Seconds to keep node down
+    ///   store_nodes        (pruned nodes)       Nodes for storage size lookup
+    #[command(verbatim_doc_comment)]
+    Report {
+        /// Output file path for the markdown report
+        #[arg(short = 'o', long, default_value = "/tmp/quake-report.md")]
+        output: PathBuf,
+        /// Pass parameters as key=value pairs (e.g. --set sanity=false)
+        #[clap(long = "set", value_parser = parse_key_value)]
+        params: Vec<(String, String)>,
+    },
     /// Start an MCP (Model Context Protocol) server for AI-assisted testnet management.
     ///
     /// By default uses stdio transport (for Claude Code, Cursor, etc.).
@@ -337,9 +373,10 @@ struct StartArgs {
     infra_args: InfraArgs,
 }
 
-/// EC2 instance size overrides for remote infrastructure.
+/// EC2 instance type and optional root EBS size for remote infrastructure.
 ///
-/// See README "Instance sizing" for details.
+/// See README "Instance sizing" for details. Disk flags apply only when using
+/// `quake remote create` or `quake start --remote` (they are ignored for local testnets).
 #[derive(Args, Debug, Clone)]
 pub(crate) struct InfraArgs {
     /// EC2 instance type for nodes [default: t3.medium].
@@ -364,6 +401,18 @@ pub(crate) struct InfraArgs {
     ///   t3.2xlarge — heavy Blockscout indexing or many nodes (32 GiB RAM)
     #[clap(long, verbatim_doc_comment)]
     cc_size: Option<String>,
+    /// Root EBS volume size for nodes (GiB). Omit to use the AMI default.
+    ///
+    /// Long runs need more than the default root volume when debug logs fill the disk;
+    /// pair with `--node-size` for RAM headroom. When set, must be at least **8** (typical
+    /// lower bound vs AMI snapshot size; AWS may still require a larger minimum for a given AMI).
+    #[clap(long, value_name = "GIB", value_parser = clap::value_parser!(u32).range(8..))]
+    node_disk_gb: Option<u32>,
+    /// Root EBS volume size for the Control Center (GiB). Omit to use the AMI default.
+    ///
+    /// When set, must be at least **8** (see `--node-disk-gb`).
+    #[clap(long, value_name = "GIB", value_parser = clap::value_parser!(u32).range(8..))]
+    cc_disk_gb: Option<u32>,
 }
 
 #[derive(Args)]
@@ -734,6 +783,7 @@ async fn main() -> Result<()> {
             );
         }
         export::import_shared_testnet(path)?;
+        return Ok(());
     }
 
     // Force the use of remote mode on certain sub-commands
@@ -878,6 +928,10 @@ async fn main() -> Result<()> {
                 .run_tests(&spec, dry_run, rpc_timeout, &params)
                 .await?
         }
+        Commands::Report { output, params } => {
+            let params = crate::tests::TestParams::from(params);
+            report::run_report(&testnet, &params, &output).await?
+        }
         Commands::Wait { command } => match command {
             WaitSubcommand::Height {
                 height,
@@ -947,6 +1001,8 @@ async fn pre_start(
             true,
             args.infra_args.node_size.as_deref(),
             args.infra_args.cc_size.as_deref(),
+            args.infra_args.node_disk_gb,
+            args.infra_args.cc_disk_gb,
         )?;
 
         // Reload testnet with the recently created infra files

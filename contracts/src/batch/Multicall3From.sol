@@ -17,8 +17,8 @@
 pragma solidity ^0.8.29;
 
 import {ICallFrom} from "../call-from/ICallFrom.sol";
+import {Precompiles} from "../Precompiles.sol";
 import {IMulticall3From} from "./IMulticall3From.sol";
-import {Addresses} from "../../scripts/Addresses.sol";
 
 /// @title Multicall3From
 /// @notice Sender-preserving batch-call contract that mirrors the original
@@ -29,7 +29,7 @@ import {Addresses} from "../../scripts/Addresses.sol";
 ///      Reentrancy is safe: the contract holds no state that could be
 ///      corrupted by a reentrant call.
 contract Multicall3From is IMulticall3From {
-    ICallFrom public constant CALL_FROM = ICallFrom(Addresses.CALL_FROM);
+    ICallFrom public constant CALL_FROM = ICallFrom(Precompiles.CALL_FROM);
 
     /// @inheritdoc IMulticall3From
     function aggregate(Call[] calldata calls)

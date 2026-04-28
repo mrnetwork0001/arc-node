@@ -83,12 +83,16 @@ impl Terraform {
     /// Create the nodes and the Control Center server in the remote infrastructure.
     ///
     /// `node_size` and `cc_size` override the Terraform defaults for EC2 instance types.
+    /// When set, `node_disk_gb` and `cc_disk_gb` configure root EBS volume sizes (GiB). When omitted,
+    /// Terraform leaves the AMI default root volume size.
     pub(crate) fn create(
         &self,
         dry_run: bool,
         yes: bool,
         node_size: Option<&str>,
         cc_size: Option<&str>,
+        node_disk_gb: Option<u32>,
+        cc_disk_gb: Option<u32>,
     ) -> Result<()> {
         // Ensure testnet directory exists
         if !dry_run {
@@ -98,7 +102,13 @@ impl Terraform {
 
         let mut args: Vec<&str> = vec![if dry_run { "plan" } else { "apply" }];
 
-        let vars = self.build_variables(&self.node_names, node_size, cc_size)?;
+        let vars = self.build_variables(
+            &self.node_names,
+            node_size,
+            cc_size,
+            node_disk_gb,
+            cc_disk_gb,
+        )?;
         args.extend(vars.iter().map(String::as_str));
 
         let state_flag = self.state_flag();
@@ -117,7 +127,7 @@ impl Terraform {
     pub(crate) fn destroy(&self, yes: bool) -> Result<()> {
         let mut args: Vec<&str> = vec!["destroy"];
 
-        let vars = self.build_variables(&self.node_names, None, None)?;
+        let vars = self.build_variables(&self.node_names, None, None, None, None)?;
         args.extend(vars.iter().map(String::as_str));
 
         let state_flag = self.state_flag();
@@ -158,6 +168,8 @@ impl Terraform {
         node_names: &[String],
         node_size: Option<&str>,
         cc_size: Option<&str>,
+        node_disk_gb: Option<u32>,
+        cc_disk_gb: Option<u32>,
     ) -> Result<Vec<String>> {
         let mut args: Vec<String> = Vec::new();
 
@@ -246,6 +258,16 @@ impl Terraform {
         if let Some(size) = cc_size {
             args.push("-var".to_string());
             args.push(format!("cc_size={size}"));
+        }
+
+        if let Some(gib) = node_disk_gb {
+            args.push("-var".to_string());
+            args.push(format!("node_volume_size={gib}"));
+        }
+
+        if let Some(gib) = cc_disk_gb {
+            args.push("-var".to_string());
+            args.push(format!("cc_volume_size={gib}"));
         }
 
         Ok(args)

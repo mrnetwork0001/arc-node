@@ -235,8 +235,10 @@ pub struct StartCmd {
     #[clap(long = "execution-persistence-backpressure")]
     pub execution_persistence_backpressure: bool,
 
-    /// Number of blocks the execution layer is allowed to lag behind the
-    /// consensus layer before persistence backpressure is applied.
+    /// Maximum canonical-minus-persisted gap the execution layer may have
+    /// before persistence backpressure is applied.
+    ///
+    /// Backpressure begins once the gap reaches this threshold.
     ///
     /// Only takes effect when --execution-persistence-backpressure is enabled.
     /// Large values weaken backpressure and may allow the execution layer
@@ -669,6 +671,13 @@ impl StartCmd {
             ));
         }
 
+        if self.execution_persistence_backpressure_threshold == 0 {
+            return Err(eyre::eyre!(
+                "--execution-persistence-backpressure-threshold must be greater than 0.\n\
+                A value of 0 would cause persistence backpressure to stall indefinitely once active."
+            ));
+        }
+
         Ok(())
     }
 
@@ -839,6 +848,21 @@ mod tests {
             result.is_err(),
             "Should fail with another mix of IPC and RPC"
         );
+    }
+
+    #[test]
+    fn validate_err_with_zero_persistence_backpressure_threshold() {
+        let mut cmd = new_start_cmd();
+        cmd.execution_persistence_backpressure_threshold = 0;
+
+        let result = cmd.validate();
+        assert!(
+            result.is_err(),
+            "Should fail with zero persistence backpressure threshold"
+        );
+
+        let err_msg = result.unwrap_err().to_string();
+        assert!(err_msg.contains("execution-persistence-backpressure-threshold"));
     }
 
     #[test]

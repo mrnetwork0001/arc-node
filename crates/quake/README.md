@@ -1354,14 +1354,19 @@ described below.
 ### Instance sizing
 
 The `--node-size` and `--cc-size` flags let you override the default EC2 instance
-types when creating remote infrastructure:
+types when creating remote infrastructure. The `--node-disk-gb` and `--cc-disk-gb`
+flags set the root EBS volume size in GiB for nodes and the Control Center;
+omit them to keep the AMI default volume size.
 
 ```bash
 # Use larger nodes for a multi-day testnet
 quake remote create --node-size t3.large --cc-size t3.2xlarge
 
+# Larger root volume for long runs (disk fills before RAM on default volume)
+quake remote create --node-size t3.large --node-disk-gb 100 --cc-disk-gb 100
+
 # Or with the shorthand
-quake start --remote --node-size t3.large
+quake start --remote --node-size t3.large --node-disk-gb 100
 ```
 
 #### Node instances
@@ -1379,14 +1384,14 @@ consumer of both memory (~2.5 GiB) and disk (debug logs grow at ~200 MiB/hr).
 The duration estimates assume debug-level logging with no log rotation on a 20
 GiB root volume. The primary constraint is **disk space**: the 4 GiB swap file,
 ~9 GiB of Docker images, and growing log files fill the default 20 GiB volume in
-roughly 20 hours. Larger instances don't change the disk size (that requires a
-Terraform change to `root_block_device`), but they provide more RAM headroom,
-reducing swap pressure and making the node more resilient to memory spikes.
+roughly 20 hours. Larger instances do not increase disk size; use `--node-disk-gb`
+for that. Larger instances do provide more RAM headroom, reducing swap pressure
+and making the node more resilient to memory spikes.
 
 > [!TIP]
 > For testnets that need to run longer than 20 hours, consider both upgrading
-> the instance size (for RAM) **and** increasing the EBS volume size in
-> `crates/quake/terraform/nodes.tf` (for disk).
+> the instance size (for RAM) **and** passing `--node-disk-gb` (and `--cc-disk-gb`
+> if the CC needs more space) for disk.
 
 #### Control Center (CC) instance
 
@@ -1546,7 +1551,7 @@ Initialize Terraform plugins and state. This step is required only once.
 
 Create EC2 instances for each node in the testnet, plus one extra for the Control Center (CC) server.
 ```bash
-./quake [-f <manifest>] remote create [--dry-run] [--yes] [--node-size <type>] [--cc-size <type>]
+./quake [-f <manifest>] remote create [--dry-run] [--yes] [--node-size <type>] [--cc-size <type>] [--node-disk-gb <GIB>] [--cc-disk-gb <GIB>]
 ```
 See [Instance sizing](#instance-sizing) for recommended instance types.
 

@@ -29,7 +29,7 @@ export const callFromAddress = '0x1800000000000000000000000000000000000003' as c
 // predeployed contracts
 export const deterministicDeployerProxyAddress = '0x4e59b44847b379578588920ca78fbf26c0b4956c' as const
 export const multicall3Address = '0xcA11bde05977b3631167028862bE2a173976CA11' as const
-export const multicall3FromAddress = '0xEb7cc06E3D3b5F9F9a5fA2B31B477ff72bB9c8b6' as const
+export const multicall3FromAddress = '0x825F535677d346626cDE45D64cf89C2a426467e0' as const
 
 // Denylist proxy address. Deterministic CREATE2-derived with prefix 0x360.
 // Init-code: AdminUpgradeableProxy bytecode + abi.encode(implementation, proxyAdmin, initData).
@@ -37,8 +37,10 @@ export const multicall3FromAddress = '0xEb7cc06E3D3b5F9F9a5fA2B31B477ff72bB9c8b6
 // To reproduce:
 //   INIT_CODE_HASH=<hash> make mine-denylist-salt
 //
-// Salt: 0x1ff19f9552a8ba2ba770fc38c8846b30ca47ab7b1caa6cfdfdd3021c1bbe84a4
-export const denylistAddress = '0x36082bA812806eB06C2758c412522669b5E2ac7b' as const
-export const memoAddress = '0x9702466268ccF55eAB64cdf484d272Ac08d3b75b' as const
-export const gasGuzzlerAddress = '0x1be052abb35D7f41609Bfec8F2fC2A684CB9984f' as const
-export const testTokenAddress = '0xe8e7F64D3d4eA1D5b9722A0769c3e7aC380b1423' as const
+// Salt: 0x2e8184e0b708cc70e9f829091612c4c8efef8006ee7527c73bdbbd70b64c36c8
+export const denylistAddress = '0x360Eb67EDbA456Bbe01512679f36c2717AA65121' as const
+export const memoAddress = '0xe4aa7Ed3585AEf598179f873086F75Fcd6D4b755' as const
+export const gasGuzzlerAddress = '0x45a834A6bB86F516D4157a8cBcc60f2F35F8398C' as const
+export const testTokenAddress = '0x298122B4bF05CC897662e535C18417f44C7f274b' as const
+
+export const localdevFeeRecipient = '0x65E0a200006D4FF91bD59F9694220dafc49dbBC1' as const

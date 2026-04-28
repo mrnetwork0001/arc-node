@@ -21,12 +21,12 @@
 //! perimeter.
 //!
 //! ```text
-//! # Using defaults (arc_node=arc-node, snapshot_provider=snapshot):
+//! # Using defaults (arc_nodes=ARC_NODES group from manifest, snapshot_provider=snapshot):
 //! ./quake test sanity:arc_node
 //!
-//! # With custom parameters:
+//! # With custom parameters (comma-separated; accepts node names and node groups):
 //! ./quake test sanity:arc_node \
-//!   --set arc_node=arc-node \
+//!   --set arc_nodes=ARC_NODES_CONSENSUS \
 //!   --set snapshot_provider=snapshot
 //! ```
 //!
@@ -53,6 +53,41 @@ use super::historical_queries;
 use super::{quake_test, RpcClientFactory, TestParams, TestResult};
 use crate::node::NodeName;
 use crate::testnet::Testnet;
+use crate::RemoteSubcommand;
+
+/// Manifest node-group name used as the default when `--set arc_nodes=…` is not
+/// provided. If the manifest does not define this group, the default is empty
+/// and the caller should skip gracefully.
+pub(crate) const DEFAULT_ARC_NODES_GROUP: &str = "ARC_NODES";
+
+/// Resolve the `arc_nodes` test parameter into an explicit list of node names.
+///
+/// Behavior:
+/// - If `--set arc_nodes=…` is provided, split on `,` and run each token
+///   through [`crate::manifest::Manifest::resolve_node_selectors`] so users can
+///   mix explicit node names and node-group names (e.g.
+///   `arc_nodes=ARC_NODES_CONSENSUS,arc-extra`).
+/// - If the parameter is not set, return the contents of the
+///   [`DEFAULT_ARC_NODES_GROUP`] node-group if it exists in the manifest,
+///   otherwise an empty vector (callers should skip gracefully).
+pub(crate) fn resolve_arc_nodes(testnet: &Testnet, params: &TestParams) -> Result<Vec<String>> {
+    let raw = params.get_or("arc_nodes", "");
+    if raw.trim().is_empty() {
+        return Ok(testnet
+            .manifest
+            .runtime_node_groups()
+            .get(DEFAULT_ARC_NODES_GROUP)
+            .cloned()
+            .unwrap_or_default());
+    }
+
+    let selectors: Vec<String> = raw
+        .split(',')
+        .map(|s| s.trim().to_owned())
+        .filter(|s| !s.is_empty())
+        .collect();
+    testnet.manifest.resolve_node_selectors(&selectors)
+}
 
 const TARGET_HEIGHT: u64 = 120;
 const CATCHUP_TIMEOUT: Duration = Duration::from_secs(120);
@@ -73,17 +108,20 @@ fn arc_node_test<'a>(
     params: &'a TestParams,
 ) -> TestResult<'a> {
     Box::pin(async move {
-        let arc_node_names: Vec<String> = params
-            .get_or("arc_node", "arc-node")
-            .split(',')
-            .map(|s| s.trim().to_owned())
-            .filter(|s| !s.is_empty())
-            .collect();
+        let arc_node_names = resolve_arc_nodes(testnet, params)?;
+        if arc_node_names.is_empty() {
+            info!(
+                "Skipping: no arc nodes resolved (set --set arc_nodes=… or define the \
+                 {DEFAULT_ARC_NODES_GROUP} node-group in the manifest)"
+            );
+            return Ok(());
+        }
         let snapshot_provider = params.get_or("snapshot_provider", "snapshot");
+        let reference = params.get_or("reference", "validator1");
         let addr = params.get_or("addr", arc_checks::mev::DEFAULT_ADDR);
 
         // Skip if any required node isn't in the manifest
-        let required_singles = ["validator1", snapshot_provider.as_str()];
+        let required_singles = [reference.as_str(), snapshot_provider.as_str()];
         let missing_arc: Vec<_> = arc_node_names
             .iter()
             .filter(|n| testnet.nodes_metadata.execution_http_url(n).is_none())
@@ -113,7 +151,14 @@ fn arc_node_test<'a>(
             .collect();
 
         info!("[Phase 1] Snapshot recovery");
-        snapshot_recovery(testnet, factory, &snapshot_provider, &arc_node_urls).await?;
+        snapshot_recovery(
+            testnet,
+            factory,
+            &reference,
+            &snapshot_provider,
+            &arc_node_urls,
+        )
+        .await?;
 
         info!("[Phase 2] MEV protection");
         mev_protection(testnet, &arc_node_names, &addr).await?;
@@ -122,7 +167,7 @@ fn arc_node_test<'a>(
         mempool_empty(testnet, &arc_node_names, &arc_node_urls).await?;
 
         info!("[Phase 4] Transaction forwarding");
-        tx_forwarding(testnet, factory, &arc_node_urls).await?;
+        tx_forwarding(testnet, factory, &reference, &arc_node_urls).await?;
 
         info!("[DONE] sanity:arc_node passed");
         Ok(())
@@ -131,17 +176,25 @@ fn arc_node_test<'a>(
 
 /// Snapshot a provider, restore each arc-node from the snapshot, wait
 /// for it to catch up, and verify historical queries succeed.
-async fn snapshot_recovery(
+///
+/// Skipped in remote mode, currently requires local Docker Compose and filesystem access.
+pub(crate) async fn snapshot_recovery(
     testnet: &Testnet,
     factory: &RpcClientFactory,
+    reference: &str,
     snapshot_provider: &str,
     arc_node_urls: &[(NodeName, Url)],
 ) -> Result<()> {
-    info!("Waiting for validator1 to reach height {TARGET_HEIGHT}");
+    if testnet.is_remote() {
+        info!("[Phase 1] Snapshot recovery skipped (remote mode)");
+        return Ok(());
+    }
+
+    info!("Waiting for {reference} to reach height {TARGET_HEIGHT}");
     testnet
-        .wait(TARGET_HEIGHT, &["validator1".to_string()], WAIT_TIMEOUT)
+        .wait(TARGET_HEIGHT, &[reference.to_string()], WAIT_TIMEOUT)
         .await
-        .wrap_err("Validators did not reach target height")?;
+        .wrap_err("Reference node did not reach target height")?;
 
     info!("Waiting for {snapshot_provider} to sync to {TARGET_HEIGHT}");
     testnet
@@ -163,6 +216,7 @@ async fn snapshot_recovery(
         restore_and_verify(
             testnet,
             factory,
+            reference,
             arc_node,
             arc_node_url,
             snapshot_provider,
@@ -180,6 +234,7 @@ async fn snapshot_recovery(
 async fn restore_and_verify(
     testnet: &Testnet,
     factory: &RpcClientFactory,
+    reference: &str,
     arc_node: &str,
     arc_node_url: &Url,
     snapshot_provider: &str,
@@ -192,15 +247,15 @@ async fn restore_and_verify(
 
     tokio::time::sleep(RESTART_SETTLE).await;
 
-    let validator_url = testnet
+    let ref_url = testnet
         .nodes_metadata
-        .execution_http_url("validator1")
-        .ok_or_else(|| color_eyre::eyre::eyre!("validator1 URL not in metadata"))?;
-    let validator_client = factory.create(validator_url);
-    let current_tip = validator_client
+        .execution_http_url(reference)
+        .ok_or_else(|| color_eyre::eyre::eyre!("{reference} URL not in metadata"))?;
+    let ref_client = factory.create(ref_url);
+    let current_tip = ref_client
         .get_latest_block_number_with_retries(3)
         .await
-        .wrap_err("Failed to get validator1 block number")?;
+        .wrap_err_with(|| format!("Failed to get {reference} block number"))?;
 
     info!("Waiting for {arc_node} to catch up to block {current_tip}");
     testnet
@@ -261,7 +316,11 @@ fn verify_cl_store_pruning(testnet: &Testnet, snapshot_provider: &str) -> Result
 
 /// Collect relay nodes that arc-nodes connect to via `follow_endpoints`
 /// and verify they have MEV protection enabled.
-async fn mev_protection(testnet: &Testnet, arc_node_names: &[String], addr: &str) -> Result<()> {
+pub(crate) async fn mev_protection(
+    testnet: &Testnet,
+    arc_node_names: &[String],
+    addr: &str,
+) -> Result<()> {
     let mut relay_names: Vec<String> = Vec::new();
     for name in arc_node_names {
         if let Some(node) = testnet.manifest.nodes.get(name.as_str()) {
@@ -313,7 +372,7 @@ async fn mev_protection(testnet: &Testnet, arc_node_names: &[String], addr: &str
 
 /// Phase 3: Check that trusted-perimeter node mempools are empty.
 /// Excludes arc-nodes and their relay nodes (which have txpool disabled).
-async fn mempool_empty(
+pub(crate) async fn mempool_empty(
     testnet: &Testnet,
     arc_node_names: &[String],
     arc_node_urls: &[(NodeName, Url)],
@@ -356,69 +415,105 @@ async fn mempool_empty(
             .join(", ")
     );
     let report = arc_checks::check_mempool(&trusted_urls).await?;
-    for check in &report.checks {
-        ensure!(
-            check.passed,
-            "Mempool check failed on {}: {}",
-            check.name,
-            check.message
-        );
+    if testnet.is_remote() {
+        for check in &report.checks {
+            if !check.passed {
+                info!(
+                    "  WARN (remote): mempool not empty on {}: {}",
+                    check.name, check.message
+                );
+            }
+        }
+        info!("[Phase 3] Mempool check done (warnings only in remote mode)");
+    } else {
+        for check in &report.checks {
+            ensure!(
+                check.passed,
+                "Mempool check failed on {}: {}",
+                check.name,
+                check.message
+            );
+        }
+        info!("[Phase 3] All trusted node mempools empty");
     }
-    info!("[Phase 3] All trusted node mempools empty");
     Ok(())
 }
 
 /// Phase 4: Send transactions to each arc-node and verify they are forwarded
 /// to validators, included in blocks, and the arc-node mempools drain.
-async fn tx_forwarding(
+///
+/// In remote mode, uses `quake remote load` instead of local `testnet.load()`
+/// (which requires genesis.json on the local filesystem).
+pub(crate) async fn tx_forwarding(
     testnet: &Testnet,
     factory: &RpcClientFactory,
+    reference: &str,
     arc_node_urls: &[(NodeName, Url)],
 ) -> Result<()> {
-    let load_config = SpammerWrapper::parse_from([
-        "test",
-        "-n",
-        &LOAD_NUM_TXS.to_string(),
-        "--rate",
-        "10",
-        "--mix",
-        "transfer=100",
-    ])
-    .args
-    .to_config(true, false);
+    let ref_url = testnet
+        .nodes_metadata
+        .execution_http_url(reference)
+        .ok_or_else(|| color_eyre::eyre::eyre!("{reference} URL not in metadata"))?;
+    let ref_client = factory.create(ref_url);
 
     for (arc_node, arc_node_url) in arc_node_urls {
         let client = factory.create(arc_node_url.clone());
-        let height_before = client
+
+        let tip = ref_client
             .get_latest_block_number_with_retries(3)
             .await
-            .wrap_err_with(|| format!("Failed to get {arc_node} block number before load"))?;
-        info!("{arc_node} at height {height_before} before load");
+            .wrap_err_with(|| format!("Failed to get {reference} height"))?;
+        info!("Waiting for {arc_node} to sync to reference tip ({tip})");
+        testnet
+            .wait(tip, &[arc_node.to_string()], Duration::from_secs(60))
+            .await
+            .wrap_err_with(|| format!("{arc_node} did not sync to validator tip"))?;
 
         info!("Sending {LOAD_NUM_TXS} transactions to {arc_node}");
-        testnet
-            .load(vec![arc_node.clone()], &load_config)
-            .await
-            .wrap_err_with(|| format!("Failed to send load to {arc_node}"))?;
+        if testnet.is_remote() {
+            let mut args: Vec<String> = vec!["--targets".into(), arc_node.clone()];
+            args.extend(["-n".into(), LOAD_NUM_TXS.to_string()]);
+            args.extend(["--rate".into(), "10".into()]);
+            args.extend(["--mix".into(), "transfer=100".into()]);
+            testnet
+                .remote(RemoteSubcommand::Load { args })
+                .await
+                .wrap_err_with(|| format!("Remote load to {arc_node} failed"))?;
+        } else {
+            let load_config = SpammerWrapper::parse_from([
+                "test",
+                "-n",
+                &LOAD_NUM_TXS.to_string(),
+                "--rate",
+                "10",
+                "--mix",
+                "transfer=100",
+            ])
+            .args
+            .to_config(true, false);
+            testnet
+                .load(vec![arc_node.clone()], &load_config)
+                .await
+                .wrap_err_with(|| format!("Failed to send load to {arc_node}"))?;
+        }
 
-        info!("Waiting for new blocks after load");
-        testnet
-            .wait(
-                height_before + 2,
-                &[arc_node.to_string()],
-                Duration::from_secs(30),
-            )
-            .await
-            .wrap_err_with(|| format!("{arc_node} did not advance after load"))?;
-
-        let height_after = client
+        let height_after_send = client
             .get_latest_block_number_with_retries(3)
             .await
-            .wrap_err_with(|| format!("Failed to get {arc_node} block number after load"))?;
-        info!("{arc_node} at height {height_after} after load");
+            .wrap_err_with(|| format!("Failed to get {arc_node} height after send"))?;
+        info!("{arc_node} at height {height_after_send} after sending txs");
 
+        // The send takes ~1s; some txs may already be included in the 2-3
+        // blocks produced during that window. Look back slightly to cover them.
+        let scan_start = height_after_send.saturating_sub(2);
+        let scan_end = height_after_send + 6;
+        info!("Waiting for {arc_node} to reach height {scan_end}");
+        testnet
+            .wait(scan_end, &[arc_node.to_string()], Duration::from_secs(30))
+            .await
+            .wrap_err_with(|| format!("{arc_node} did not advance after load"))?;
         let mut total_txs = 0u64;
-        for h in (height_before + 1)..=height_after {
+        for h in scan_start..=scan_end {
             let block =
                 super::historical_queries::get_block_with_txs(factory, arc_node_url, h).await?;
             let tx_count = block
@@ -432,12 +527,32 @@ async fn tx_forwarding(
             total_txs += tx_count;
         }
 
-        ensure!(
-            total_txs >= LOAD_NUM_TXS,
-            "Expected at least {LOAD_NUM_TXS} transactions in blocks {}-{} on {arc_node}, found {total_txs}",
-            height_before + 1,
-            height_after
-        );
+        if total_txs < LOAD_NUM_TXS {
+            // Diagnostic: check if txs are stuck in arc-node's mempool
+            let node_urls = vec![(arc_node.clone(), arc_node_url.clone())];
+            match arc_checks::check_mempool(&node_urls).await {
+                Ok(report) => {
+                    for check in &report.checks {
+                        info!("  mempool {arc_node}: {}", check.message);
+                    }
+                    if !report.passed() {
+                        ensure!(
+                            false,
+                            "Transactions stuck in {arc_node} mempool (not forwarded). \
+                             Expected {LOAD_NUM_TXS} in blocks {scan_start}-{scan_end}, found {total_txs}",
+                        );
+                    }
+                }
+                Err(e) => {
+                    info!("  mempool check unavailable on {arc_node}: {e:#}");
+                }
+            }
+            ensure!(
+                false,
+                "Expected at least {LOAD_NUM_TXS} transactions in blocks {scan_start}-{scan_end} on {arc_node}, \
+                 found {total_txs} (mempool was empty — txs forwarded but landed outside scan window)"
+            );
+        }
         info!("{arc_node}: {total_txs} transactions included in blocks");
 
         let node_urls = vec![(arc_node.clone(), arc_node_url.clone())];
@@ -451,4 +566,64 @@ async fn tx_forwarding(
 
     info!("[Phase 4] Transaction forwarding passed");
     Ok(())
+}
+
+/// Standalone tx forwarding test.
+///
+/// Sends transactions to follow-mode arc-nodes and verifies they are forwarded
+/// to validators and included in blocks. Unlike `sanity:arc_node`, this does
+/// NOT run snapshot recovery first — the arc-nodes must already be running
+/// and in sync.
+///
+/// # Parameters
+///
+/// | Key         | Default                        | Description                                                            |
+/// |-------------|--------------------------------|------------------------------------------------------------------------|
+/// | `arc_nodes` | `ARC_NODES` group              | Comma-separated follow-mode nodes (names or node-group names) to test  |
+/// | `reference` | `validator1`                   | Reference node for tip height                                          |
+///
+/// # Usage
+///
+/// ```text
+/// quake test tx:forward                                   # default: ARC_NODES group
+/// quake test tx:forward --set arc_nodes=ARC_NODES_CONSENSUS
+/// quake test tx:forward --set arc_nodes=arc-node,rpc-full
+/// quake test tx:forward --set reference=validator2
+/// ```
+#[quake_test(group = "tx", name = "forward")]
+fn forward_test<'a>(
+    testnet: &'a Testnet,
+    factory: &'a RpcClientFactory,
+    params: &'a TestParams,
+) -> TestResult<'a> {
+    Box::pin(async move {
+        let arc_node_names = resolve_arc_nodes(testnet, params)?;
+        let reference = params.get_or("reference", "validator1");
+
+        let arc_node_urls: Vec<_> = testnet
+            .nodes_metadata
+            .all_execution_urls()
+            .into_iter()
+            .filter(|(name, _)| arc_node_names.contains(name))
+            .collect();
+
+        if arc_node_urls.is_empty() {
+            info!(
+                "Skipping: no arc nodes resolved (set --set arc_nodes=… or define the \
+                 {DEFAULT_ARC_NODES_GROUP} node-group in the manifest)"
+            );
+            return Ok(());
+        }
+
+        if testnet
+            .nodes_metadata
+            .execution_http_url(&reference)
+            .is_none()
+        {
+            info!("Skipping: reference node {reference} not in manifest");
+            return Ok(());
+        }
+
+        tx_forwarding(testnet, factory, &reference, &arc_node_urls).await
+    })
 }

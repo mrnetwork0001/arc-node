@@ -52,6 +52,7 @@ RUN cargo clean
 # the Cargo registry, git dependencies, and the entire build target directory.
 RUN --mount=type=cache,sharing=private,target=/usr/local/cargo/registry \
 	--mount=type=cache,sharing=private,target=/usr/local/cargo/git \
+	--mount=type=cache,sharing=private,target=/app/target \
     # Build the Spammer binary.
     cargo build -p spammer --release && \
     # Copy the built binary to a temporary, non-cached location to make it accessible to the next stage.

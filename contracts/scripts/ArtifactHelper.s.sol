@@ -16,6 +16,11 @@
 
 pragma solidity ^0.8.29;
 
+// ArtifactHelper — genesis builder entrypoint. Reads compiled contract bytecode and
+// simulates CREATE2 deployments to produce the `alloc` entries baked into genesis.json.
+//
+// Forge is canonical for all CREATE2-deployed genesis contracts — do NOT switch this
+// to read Hardhat's output.
 import {Script, console} from "forge-std/Script.sol";
 import {stdJson} from "forge-std/StdJson.sol";
 
@@ -154,11 +159,12 @@ contract ArtifactHelper is Script {
   }
 
   function deployArcNetworkContracts(string memory arcNetworkContractDir, address validatorRegistryProxyAddr) internal returns (string memory) {
+    // Reads Forge's flat `<Name>.sol/<Name>.json` layout via `.bytecode.object`.
     // ProtocolConfig
     address protocolConfig = deployDeterministicContract(
       loadBytecode(
-        string.concat(arcNetworkContractDir, "protocol-config/ProtocolConfig.sol/ProtocolConfig.json"),
-        ".bytecode"
+        string.concat(arcNetworkContractDir, "ProtocolConfig.sol/ProtocolConfig.json"),
+        ".bytecode.object"
       )
     );
     vm.serializeString("output", "ProtocolConfig", getJsonContractCode(address(protocolConfig)));
@@ -167,7 +173,7 @@ contract ArtifactHelper is Script {
     address denylist = deployDeterministicContract(
       loadBytecode(
         string.concat(arcNetworkContractDir, "Denylist.sol/Denylist.json"),
-        ".bytecode"
+        ".bytecode.object"
       )
     );
     vm.serializeString("output", "Denylist", getJsonContractCode(address(denylist)));
@@ -175,8 +181,8 @@ contract ArtifactHelper is Script {
     // ValidatorRegistry
     address validatorRegistry = deployDeterministicContract(
       loadBytecode(
-        string.concat(arcNetworkContractDir, "validator-manager/ValidatorRegistry.sol/ValidatorRegistry.json"),
-        ".bytecode"
+        string.concat(arcNetworkContractDir, "ValidatorRegistry.sol/ValidatorRegistry.json"),
+        ".bytecode.object"
       )
     );
     vm.serializeString("output", "ValidatorRegistry", getJsonContractCode(address(validatorRegistry)));
@@ -185,8 +191,8 @@ contract ArtifactHelper is Script {
     address proxy = deployDeterministicContract(
       bytes.concat(
         loadBytecode(
-          string.concat(arcNetworkContractDir, "proxy/AdminUpgradeableProxy.sol/AdminUpgradeableProxy.json"),
-          ".bytecode"
+          string.concat(arcNetworkContractDir, "AdminUpgradeableProxy.sol/AdminUpgradeableProxy.json"),
+          ".bytecode.object"
         ),
         abi.encode(address(validatorRegistry), address(0x0000000000000000000000000000000000000001), hex"")
       )
@@ -197,8 +203,8 @@ contract ArtifactHelper is Script {
     address poaManager = deployDeterministicContract(
       bytes.concat(
         loadBytecode(
-          string.concat(arcNetworkContractDir, "validator-manager/PermissionedValidatorManager.sol/PermissionedValidatorManager.json"),
-          ".bytecode"
+          string.concat(arcNetworkContractDir, "PermissionedValidatorManager.sol/PermissionedValidatorManager.json"),
+          ".bytecode.object"
         ),
         abi.encode(address(validatorRegistryProxyAddr))
       )
@@ -208,8 +214,8 @@ contract ArtifactHelper is Script {
     // GasGuzzler
     address gasGuzzler = deployDeterministicContract(
       loadBytecode(
-        string.concat(arcNetworkContractDir, "mocks/GasGuzzler.sol/GasGuzzler.json"),
-        ".bytecode"
+        string.concat(arcNetworkContractDir, "GasGuzzler.sol/GasGuzzler.json"),
+        ".bytecode.object"
       )
     );
     vm.serializeString("output", "GasGuzzler", getJsonContractCode(address(gasGuzzler)));
@@ -217,8 +223,8 @@ contract ArtifactHelper is Script {
     // TestToken (ERC-20 for spammer load testing)
     address testToken = deployDeterministicContract(
       loadBytecode(
-        string.concat(arcNetworkContractDir, "mocks/TestToken.sol/TestToken.json"),
-        ".bytecode"
+        string.concat(arcNetworkContractDir, "TestToken.sol/TestToken.json"),
+        ".bytecode.object"
       )
     );
     vm.serializeString("output", "TestToken", getJsonContractCode(address(testToken)));
@@ -226,8 +232,8 @@ contract ArtifactHelper is Script {
     // Memo
     address memo = deployDeterministicContract(
       loadBytecode(
-        string.concat(arcNetworkContractDir, "memo/Memo.sol/Memo.json"),
-        ".bytecode"
+        string.concat(arcNetworkContractDir, "Memo.sol/Memo.json"),
+        ".bytecode.object"
       )
     );
     vm.serializeString("output", "Memo", getJsonContractCode(address(memo)));
@@ -235,8 +241,8 @@ contract ArtifactHelper is Script {
     // Multicall3From
     address multicall3From = deployDeterministicContract(
       loadBytecode(
-        string.concat(arcNetworkContractDir, "batch/Multicall3From.sol/Multicall3From.json"),
-        ".bytecode"
+        string.concat(arcNetworkContractDir, "Multicall3From.sol/Multicall3From.json"),
+        ".bytecode.object"
       )
     );
     return vm.serializeString("output", "Multicall3From", getJsonContractCode(address(multicall3From)));
@@ -302,7 +308,7 @@ contract ArtifactHelper is Script {
     vm.serializeString("output", "FiatTokenProxy", getJsonContractCode(fiatTokenProxyAddr));
 
     // Deploy ArcNetwork contracts (extracted to avoid stack too deep)
-    string memory output = deployArcNetworkContracts("contracts/out/hardhat/contracts/src/", validatorRegistryProxyAddr);
+    string memory output = deployArcNetworkContracts("contracts/out/forge/", validatorRegistryProxyAddr);
     vm.writeJson(output, outputPath);
   }
 }

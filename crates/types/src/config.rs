@@ -77,6 +77,9 @@ impl Config {
         if self.value_sync.enabled && self.value_sync.batch_size == 0 {
             bail!("when value_sync is enabled, batch_size must be greater than 0");
         }
+        if self.execution.persistence_backpressure_threshold == 0 {
+            bail!("execution.persistence_backpressure_threshold must be greater than 0");
+        }
         Ok(())
     }
 }
@@ -177,8 +180,10 @@ pub struct ExecutionConfig {
     #[serde(default)]
     pub persistence_backpressure: bool,
 
-    /// Number of blocks the EL is allowed to lag behind the CL before
+    /// Maximum canonical-minus-persisted gap the EL may have before
     /// persistence backpressure is applied during startup replay.
+    ///
+    /// Backpressure begins once the gap reaches this threshold.
     /// Only takes effect when `persistence_backpressure` is true.
     #[serde(default = "ExecutionConfig::default_persistence_backpressure_threshold")]
     pub persistence_backpressure_threshold: u64,
@@ -383,6 +388,15 @@ mod tests {
 
             config.value_sync.enabled = false;
             assert!(config.validate().is_ok());
+        }
+
+        #[test]
+        fn config_rejects_zero_persistence_backpressure_threshold() {
+            let mut config = Config::default();
+            assert!(config.validate().is_ok());
+
+            config.execution.persistence_backpressure_threshold = 0;
+            assert!(config.validate().is_err());
         }
     }
 }

@@ -14,19 +14,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-export * from './BalanceComparator'
-export * from './Denylist'
-export * from './DeterministicDeployerProxy'
-export * from './NativeCoinAuthority'
-export * from './NativeTransferHelper'
-export * from './ProtocolConfig'
-export * from './ReceiptVerifier'
-export * from './TraceVerifier'
-export * from './networks'
-export * from './matchers'
-export * from './client-extension'
-export * from './RevertingProtocolConfig'
-export * from './AdminUpgradeableProxy'
-export * from './GasGuzzler'
-export * from './SystemAccounting'
-export * from './forge-artifact'
+pragma solidity ^0.8.29;
+
+/// @title Precompiles
+/// @notice Genesis-fixed addresses of Arc precompiles.
+library Precompiles {
+    address internal constant NATIVE_COIN_AUTHORITY = 0x1800000000000000000000000000000000000000;
+    address internal constant NATIVE_COIN_CONTROL = 0x1800000000000000000000000000000000000001;
+    address internal constant SYSTEM_ACCOUNTING = 0x1800000000000000000000000000000000000002;
+    address internal constant CALL_FROM = 0x1800000000000000000000000000000000000003;
+    address internal constant PQ = 0x1800000000000000000000000000000000000004;
+}

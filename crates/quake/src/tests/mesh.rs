@@ -72,7 +72,7 @@ use crate::testnet::Testnet;
 /// How the test categorizes a node based on the manifest topology.
 /// This determines what mesh tier is acceptable for that node.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum NodeCategory {
+pub(crate) enum NodeCategory {
     /// Circle-operated validator (direct mesh expected).
     /// Must be `FullyConnected` in strict mode.
     CircleValidator,
@@ -102,7 +102,7 @@ impl fmt::Display for NodeCategory {
 }
 
 /// Categorize a node based on manifest data.
-pub(super) fn categorize_node(
+pub(crate) fn categorize_node(
     node_name: &str,
     manifest_node: &Node,
     testnet: &Testnet,
@@ -139,7 +139,7 @@ pub(super) fn categorize_node(
 /// When external validators are present, circle validators are allowed to be
 /// `MultiHop` because indirect paths to external validators (behind sentries)
 /// are expected and don't indicate a mesh problem.
-pub(super) fn check_strict(
+pub(crate) fn check_strict(
     category: NodeCategory,
     tier: MeshTier,
     has_external_validators: bool,
@@ -152,13 +152,11 @@ pub(super) fn check_strict(
             )),
             _ => Err(format!("expected fully-connected, got {tier}")),
         },
-        NodeCategory::ExternalValidator => {
-            if tier == MeshTier::NotConnected {
-                Err(format!("expected reachable (multi-hop ok), got {tier}"))
-            } else {
-                Ok(format!("{tier}"))
-            }
-        }
+        NodeCategory::ExternalValidator => match tier {
+            MeshTier::NotConnected => Err(format!("expected reachable (multi-hop ok), got {tier}")),
+            MeshTier::MultiHop => Ok(format!("{tier} (ok: behind sentry)")),
+            _ => Ok(format!("{tier}")),
+        },
         NodeCategory::ConsensusParticipant => {
             if tier == MeshTier::NotConnected {
                 Err(format!("expected connected, got {tier}"))

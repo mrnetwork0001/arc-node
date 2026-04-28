@@ -34,24 +34,17 @@ FROM chef AS builder
 RUN printf 'arc:x:999:999::/data:/bin/false\n' > /tmp/passwd && \
     printf 'arc:x:999:\n' > /tmp/group
 
-# Define build-time arguments.
+# Build-time args that are stable across commits — placed before dep-cook so the
+# cook layer's S3 cache entry survives commits that only change git metadata.
 ARG BUILD_PROFILE=release
 ARG FEATURES=""
 ARG RUSTFLAGS=""
-ARG GIT_COMMIT_HASH="0000000000000000000000000000000000000000"
-ARG GIT_VERSION="v0.0.0-unknown"
-ARG GIT_SHORT_HASH="00000000"
-ARG ARC_IDEMPOTENT_BUILD=false
 
 # Set environment variables for the build process.
 ENV CARGO_HOME=/usr/local/cargo
 ENV CARGO_NET_GIT_FETCH_WITH_CLI=true
 ENV CARGO_HTTP_CAINFO=/etc/ssl/certs/ca-certificates.crt
 ENV RUSTFLAGS=$RUSTFLAGS
-ENV VERGEN_GIT_SHA=$GIT_COMMIT_HASH
-ENV VERGEN_GIT_DESCRIBE=$GIT_VERSION
-ENV VERGEN_GIT_SHA_SHORT=$GIT_SHORT_HASH
-ENV ARC_IDEMPOTENT_BUILD=$ARC_IDEMPOTENT_BUILD
 
 WORKDIR /app
 
@@ -61,6 +54,17 @@ RUN --mount=type=cache,id=malachite-cargo-registry,sharing=locked,target=/usr/lo
     --mount=type=cache,id=malachite-cargo-target,sharing=locked,target=/app/target \
     # Cook the recipe produced by the planner, namely compile dependencies
     cargo chef cook --bin arc-node-consensus --profile $BUILD_PROFILE --features "$FEATURES" --recipe-path arc-node-consensus-recipe.json
+
+# Per-commit git version args come after dep-cook — moving them here prevents the
+# new commit hash from busting the cook layer's S3 cache key on every push.
+ARG GIT_COMMIT_HASH="0000000000000000000000000000000000000000"
+ARG GIT_VERSION="v0.0.0-unknown"
+ARG GIT_SHORT_HASH="00000000"
+ARG ARC_IDEMPOTENT_BUILD=false
+ENV VERGEN_GIT_SHA=$GIT_COMMIT_HASH
+ENV VERGEN_GIT_DESCRIBE=$GIT_VERSION
+ENV VERGEN_GIT_SHA_SHORT=$GIT_SHORT_HASH
+ENV ARC_IDEMPOTENT_BUILD=$ARC_IDEMPOTENT_BUILD
 
 COPY . .
 

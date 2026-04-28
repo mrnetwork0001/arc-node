@@ -247,13 +247,14 @@ pub fn analyze(nodes: &[NodeMetricsData]) -> MeshAnalysis {
             .cloned()
             .collect();
 
-        // Indirect paths between validators (through full nodes)
+        // Indirect paths between validators (through full nodes), computed
+        // within each partition so the data is available even when the mesh is
+        // partitioned.
         let mut indirect_paths = Vec::new();
-        if actual_partitions.len() == 1 {
-            let vals: Vec<&String> = all_validators.iter().collect();
+        for partition in &actual_partitions {
+            let vals: Vec<&String> = partition.iter().collect();
             for (i, v1) in vals.iter().enumerate() {
                 for v2 in &vals[i + 1..] {
-                    // Skip if directly connected
                     if validator_mesh
                         .get(*v1)
                         .map(|p| p.contains(*v2))
@@ -269,8 +270,8 @@ pub fn analyze(nodes: &[NodeMetricsData]) -> MeshAnalysis {
                     }
                 }
             }
-            indirect_paths.sort_by(|a, b| a.3.cmp(&b.3).then(a.0.cmp(&b.0)).then(a.1.cmp(&b.1)));
         }
+        indirect_paths.sort_by(|a, b| a.3.cmp(&b.3).then(a.0.cmp(&b.0)).then(a.1.cmp(&b.1)));
 
         validator_connectivity.push(ValidatorConnectivity {
             topic_name: topic.to_string(),

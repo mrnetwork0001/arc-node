@@ -68,6 +68,10 @@ node_modules/
 **/*.rs.bk
 *.pdb
 
+# Python-specific
+__pycache__/
+*.pyc
+
 # Test artifacts
 /test-results/
 /coverage/

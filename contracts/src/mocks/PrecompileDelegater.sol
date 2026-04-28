@@ -16,7 +16,7 @@
 
 pragma solidity ^0.8.29;
 
-import {Addresses} from "../../scripts/Addresses.sol";
+import {Precompiles} from "../Precompiles.sol";
 
 /**
  * @title PrecompileDelegater
@@ -36,7 +36,7 @@ contract PrecompileDelegater {
             6660000000000000000 // 6.66 token (18 decimals)
         );
         
-        (bool success, bytes memory returnData) = Addresses.NATIVE_COIN_AUTHORITY.delegatecall(mintCall);
+        (bool success, bytes memory returnData) = Precompiles.NATIVE_COIN_AUTHORITY.delegatecall(mintCall);
         
         // Bubble up the error if call failed
         if (!success) {

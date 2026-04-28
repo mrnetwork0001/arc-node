@@ -14,11 +14,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+import fs from 'fs'
+import path from 'path'
 import hre from 'hardhat'
 import { expect } from 'chai'
 import {
+  Address,
+  concat,
   createWalletClient,
+  encodeAbiParameters,
   encodeDeployData,
+  encodeFunctionData,
   Hex,
   http,
   keccak256,
@@ -29,6 +35,7 @@ import {
 } from 'viem'
 import { privateKeyToAccount } from 'viem/accounts'
 import {
+  AdminUpgradeableProxy,
   Denylist,
   DeterministicDeployerProxy,
   expectAddressEq,
@@ -36,6 +43,7 @@ import {
   gasGuzzlerArtifact,
   getClients,
   ProtocolConfig,
+  readForgeArtifactSync,
 } from '../helpers'
 import { USDC } from '../helpers/FiatToken'
 import { PermissionedValidatorManager, ValidatorRegistry, ValidatorStatus } from '../helpers/ValidatorManager'
@@ -46,6 +54,9 @@ import {
   Manifest,
   multicall3Address,
   multicall3FromAddress,
+  permissionedManagerAddress,
+  protocolConfigAddress,
+  validatorRegistryAddress,
 } from '../../scripts/genesis'
 import { getValidators } from '../helpers/networks/localdev'
 import manifest from '../../assets/artifacts/manifest.json'
@@ -127,6 +138,115 @@ describe('genesis', () => {
 
     const address = await DeterministicDeployerProxy.deployCode(sender, client, callData)
     expect(address).to.addressEqual(ktAddress)
+  })
+
+  // Regression guards: compute the CREATE2 address from current Forge-compiled bytecode
+  // (what genesis deploys), then assert it matches BOTH the hardcoded constant in
+  // scripts/genesis/addresses.ts AND the genesis placement (code present at that address
+  // on-chain). Guards against:
+  //   - stale constants when bytecode shifts (compiler settings, source edits)
+  //   - stale genesis when constants shift but genesis wasn't regenerated
+  describe('CREATE2 reproducibility', () => {
+    // Helper: read the implementation slot of an AdminUpgradeableProxy at `proxyAddress`.
+    // Used to verify proxies point at the CREATE2 impl address we compute from bytecode.
+    const implAt = async (proxyAddress: Address): Promise<Address> => {
+      const { client } = await getClients()
+      return AdminUpgradeableProxy.attach(client, proxyAddress).read.implementation()
+    }
+
+    // The stablecoin contracts (SignatureChecker, NativeFiatTokenV2_2, FiatTokenProxy) are
+    // not compiled locally — they ship as static artifacts under
+    // assets/artifacts/stablecoin-contracts/. Read those directly for CREATE2 recomputation.
+    const loadStablecoinArtifact = (name: string) => {
+      const p = path.join(__dirname, '../../assets/artifacts/stablecoin-contracts', `${name}.json`)
+      return JSON.parse(fs.readFileSync(p, 'utf8')) as { bytecode: string; linkReferences?: unknown }
+    }
+
+    it('Memo (genesis-placed)', async () => {
+      const { client } = await getClients()
+      const memoArtifact = readForgeArtifactSync('Memo')
+      const computed = DeterministicDeployerProxy.getDeployAddress(memoArtifact.bytecode)
+
+      // (1) computed address matches hardcoded constant
+      expect(computed).to.be.addressEqual(memoAddress)
+
+      // (2) genesis placed code at the computed address
+      const code = await client.getCode({ address: computed })
+      expect(code?.length).to.be.greaterThan(0)
+    })
+
+    it('Multicall3From (genesis-placed)', async () => {
+      const { client } = await getClients()
+      const m3fArtifact = readForgeArtifactSync('Multicall3From')
+      const computed = DeterministicDeployerProxy.getDeployAddress(m3fArtifact.bytecode)
+
+      // (1) computed address matches hardcoded constant
+      expect(computed).to.be.addressEqual(multicall3FromAddress)
+
+      // (2) genesis placed code at the computed address
+      const code = await client.getCode({ address: computed })
+      expect(code?.length).to.be.greaterThan(0)
+    })
+
+    it('ProtocolConfig implementation (salt=0)', async () => {
+      const { client } = await getClients()
+      const artifact = readForgeArtifactSync('ProtocolConfig')
+      const computed = DeterministicDeployerProxy.getDeployAddress(artifact.bytecode)
+
+      // (1) on-chain proxy's IMPL_SLOT points at the CREATE2 address
+      expect(await implAt(protocolConfigAddress)).to.be.addressEqual(computed)
+
+      // (2) genesis placed code at the computed address
+      const code = await client.getCode({ address: computed })
+      expect(code?.length).to.be.greaterThan(0)
+    })
+
+    it('ValidatorRegistry implementation (salt=0)', async () => {
+      const { client } = await getClients()
+      const artifact = readForgeArtifactSync('ValidatorRegistry')
+      const computed = DeterministicDeployerProxy.getDeployAddress(artifact.bytecode)
+
+      expect(await implAt(validatorRegistryAddress)).to.be.addressEqual(computed)
+
+      const code = await client.getCode({ address: computed })
+      expect(code?.length).to.be.greaterThan(0)
+    })
+
+    it('PermissionedValidatorManager implementation (salt=0, ctor arg: validatorRegistryProxy)', async () => {
+      const { client } = await getClients()
+      const artifact = readForgeArtifactSync('PermissionedValidatorManager')
+      const ctorArgs = encodeAbiParameters([{ type: 'address' }], [validatorRegistryAddress])
+      const fullInit = concat([artifact.bytecode, ctorArgs])
+      const computed = DeterministicDeployerProxy.getDeployAddress(fullInit)
+
+      expect(await implAt(permissionedManagerAddress)).to.be.addressEqual(computed)
+
+      const code = await client.getCode({ address: computed })
+      expect(code?.length).to.be.greaterThan(0)
+    })
+
+    it('NativeFiatTokenV2_2 implementation (salt=0, linked with SignatureChecker)', async () => {
+      const { client, usdc } = await clients()
+
+      // 1. SignatureChecker CREATE2 (salt=0, no args) from static stablecoin artifact
+      const sc = loadStablecoinArtifact('SignatureChecker')
+      const scAddress = DeterministicDeployerProxy.getDeployAddress(sc.bytecode as Hex)
+
+      // 2. NativeFiatTokenV2_2 has a library placeholder for SignatureChecker; replace with
+      //    the computed address before hashing. Placeholder format: __$<34-hex-hash>$__.
+      const nft = loadStablecoinArtifact('NativeFiatTokenV2_2')
+      const placeholder = '__$715109b5d747ea58b675c6ea3f0dba8c60$__'
+      const linked = nft.bytecode.split(placeholder).join(scAddress.slice(2).toLowerCase())
+
+      const computed = DeterministicDeployerProxy.getDeployAddress(linked as Hex)
+
+      // (1) FiatTokenProxy's implementation points at the computed address
+      expect(await usdc.implementation()).to.be.addressEqual(computed)
+
+      // (2) genesis placed code at the computed address
+      const code = await client.getCode({ address: computed })
+      expect(code?.length).to.be.greaterThan(0)
+    })
   })
 
   describe('USDC contract setup', () => {
@@ -345,6 +465,59 @@ describe('genesis', () => {
       const contractStorageLocation = await denylistContract.read.DENYLIST_STORAGE_LOCATION()
       expect(contractStorageLocation).to.be.eq(expectedSlot)
     })
+
+    // Regression guard: compute the Denylist implementation CREATE2 address (salt=0) from
+    // current Forge bytecode, and assert it matches BOTH the on-chain proxy's IMPL_SLOT AND that
+    // runtime code is present at that address. Catches drift if bytecode changes without
+    // genesis regeneration.
+    it('implementation at expected CREATE2 address (salt=0)', async () => {
+      const { client, denylist } = await clients()
+      const denylistArtifact = readForgeArtifactSync('Denylist')
+      const computed = DeterministicDeployerProxy.getDeployAddress(denylistArtifact.bytecode)
+
+      // (1) computed matches on-chain IMPL_SLOT (proxy points at genesis-placed impl)
+      const onChainImpl = await denylist.implementation()
+      expect(onChainImpl).to.be.addressEqual(computed)
+
+      // (2) genesis placed runtime code at the computed address
+      const code = await client.getCode({ address: computed })
+      expect(code?.length).to.be.greaterThan(0)
+    })
+
+    // Regression guard: compute the Denylist proxy CREATE2 address from
+    //   AdminUpgradeableProxy bytecode + abi.encode(impl, proxyAdmin, initData)
+    // combined with the documented mined salt, and assert it matches BOTH the hardcoded
+    // denylistAddress constant AND that runtime code is placed at that address in genesis.
+    // Mined via `INIT_CODE_HASH=<hash> make mine-denylist-salt` — see scripts/genesis/addresses.ts.
+    it('proxy at expected CREATE2 address (mined salt)', async () => {
+      const { client, denylist } = await clients()
+      const denylistArtifact = readForgeArtifactSync('Denylist')
+      const proxyArtifact = readForgeArtifactSync('AdminUpgradeableProxy')
+
+      const impl = DeterministicDeployerProxy.getDeployAddress(denylistArtifact.bytecode)
+      const [owner, proxyAdmin] = await Promise.all([denylist.owner(), denylist.admin()])
+
+      const initData = encodeFunctionData({
+        abi: Denylist.abi,
+        functionName: 'initialize',
+        args: [owner],
+      })
+      const ctorArgs = encodeAbiParameters(
+        [{ type: 'address' }, { type: 'address' }, { type: 'bytes' }],
+        [impl, proxyAdmin, initData],
+      )
+      const fullInit = concat([proxyArtifact.bytecode, ctorArgs])
+
+      const MINED_SALT = 0x2e8184e0b708cc70e9f829091612c4c8efef8006ee7527c73bdbbd70b64c36c8n
+      const computed = DeterministicDeployerProxy.getDeployAddress(fullInit, MINED_SALT)
+
+      // (1) computed matches hardcoded constant
+      expect(computed).to.be.addressEqual(denylistAddress)
+
+      // (2) genesis placed runtime code at the computed address
+      const code = await client.getCode({ address: computed })
+      expect(code?.length).to.be.greaterThan(0)
+    })
   })
 
   describe('GasGuzzler', () => {
@@ -379,7 +552,7 @@ describe('genesis', () => {
     it('bytecode matches artifact', async () => {
       const { client } = await getClients()
       const code = await client.getCode({ address: memoAddress })
-      const artifact = hre.artifacts.readArtifactSync('Memo')
+      const artifact = readForgeArtifactSync('Memo')
       expect(code).to.equal(artifact.deployedBytecode)
     })
   })
@@ -394,7 +567,7 @@ describe('genesis', () => {
     it('bytecode matches artifact', async () => {
       const { client } = await getClients()
       const code = await client.getCode({ address: multicall3FromAddress })
-      const artifact = hre.artifacts.readArtifactSync('Multicall3From')
+      const artifact = readForgeArtifactSync('Multicall3From')
       expect(code).to.equal(artifact.deployedBytecode)
     })
   })
